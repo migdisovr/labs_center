@@ -1,0 +1,62 @@
+TRUE
+{'fr': 6642000000.0, 'Ql': 1160.0, 'absQc': 1550.0, 'phi': 0.18, 'a': 0.0032, 'alpha': -0.9, 'tau': 3.8e-08, 'geometry': 'notch', 'Qi_dia_corr': 4398.870209614399, 'Qi_no_corr': 4610.25641025641, 'Qc_dia_corr': 1575.4535109204637, 'kappa_l_hz': 5725862.068965517, 'kappa_i_hz': 1509933.160901838, 'kappa_c_hz': 4215928.908063679}
+
+CIRCLE
+mode          : circle  (circle fit + optional complex polish)
+geometry      : notch
+f_r           : 6.642001e+09 Hz
+Q_l           : 1.159186e+03
+|Q_c|         : 1.548769e+03
+Q_c (DCM)     : 1.574254e+03
+Q_i (DCM)     : 4.396515e+03
+Q_i (no corr) : 4.608292e+03
+phi           : 0.180182 rad
+a, alpha, tau : 3.200040e-03,  -0.913937 rad,  3.799967e-08 s
+kappa_l / 2pi : 5.729884e+06 Hz  (FWHM)
+kappa_i / 2pi : 1.510742e+06 Hz
+kappa_c / 2pi : 4.219142e+06 Hz
+
+AMP+PHASE
+mode          : amp_phase  (amplitude → phase → complex polish)
+geometry      : notch
+f_r           : 6.642001e+09 Hz
+Q_l           : 1.159186e+03
+|Q_c|         : 1.548769e+03
+Q_c (DCM)     : 1.574254e+03
+Q_i (DCM)     : 4.396515e+03
+Q_i (no corr) : 4.608292e+03
+phi           : 0.180182 rad
+a, alpha, tau : 3.200040e-03,  -0.913937 rad,  3.799967e-08 s
+kappa_l / 2pi : 5.729884e+06 Hz  (FWHM)
+kappa_i / 2pi : 1.510742e+06 Hz
+kappa_c / 2pi : 4.219142e+06 Hz
+
+MAGNITUDE
+mode          : magnitude  (tau and alpha cannot be recovered from magnitude alone)
+geometry      : notch
+f_r           : 6.642003e+09 Hz
+Q_l           : 1.156498e+03
+|Q_c|         : 1.547989e+03
+Q_c (DCM)     : 1.573395e+03
+Q_i (DCM)     : 4.364694e+03
+Q_i (no corr) : 4.572893e+03
+phi           : 0.179950 rad
+a, alpha, tau : 3.200443e-03,  0.000000 rad,  0.000000e+00 s
+kappa_l / 2pi : 5.743203e+06 Hz  (FWHM)
+kappa_i / 2pi : 1.521757e+06 Hz
+kappa_c / 2pi : 4.221446e+06 Hz
+
+HYBRID
+mode          : hybrid  (selected amp_phase (rms_ap=1.714e-05, rms_circle=1.714e-05))
+geometry      : notch
+f_r           : 6.642001e+09 Hz
+Q_l           : 1.159186e+03
+|Q_c|         : 1.548769e+03
+Q_c (DCM)     : 1.574254e+03
+Q_i (DCM)     : 4.396515e+03
+Q_i (no corr) : 4.608292e+03
+phi           : 0.180182 rad
+a, alpha, tau : 3.200040e-03,  -0.913937 rad,  3.799967e-08 s
+kappa_l / 2pi : 5.729884e+06 Hz  (FWHM)
+kappa_i / 2pi : 1.510742e+06 Hz
+kappa_c / 2pi : 4.219142e+06 Hz
