@@ -15,6 +15,7 @@ from .guess import (
 )
 from .models import ResonatorParams, model_s, wrap_phase
 from .group_delay import (
+    delay_lorentzian,
     group_delay_model,
     guess_from_group_delay,
 )
@@ -43,17 +44,27 @@ class FitResult:
             f"geometry      : {p.geometry}",
             f"f_r           : {p.fr:.6e} Hz" + (f"  ± {e['fr']:.3e}" if "fr" in e else ""),
             f"Q_l           : {p.Ql:.6e}" + (f"  ± {e['Ql']:.3e}" if "Ql" in e else ""),
-            f"|Q_c|         : {p.absQc:.6e}",
-            f"Q_c (DCM)     : {p.Qc_dia_corr:.6e}",
-            f"Q_i (DCM)     : {p.Qi_dia_corr:.6e}"
-            + (f"  ± {e.get('Qi_dia_corr', float('nan')):.3e}" if "Qi_dia_corr" in e else ""),
-            f"Q_i (no corr) : {p.Qi_no_corr:.6e}",
-            f"phi           : {p.phi:.6f} rad",
-            f"a, alpha, tau : {p.a:.6e},  {p.alpha:.6f} rad,  {p.tau:.6e} s",
-            f"kappa_l / 2pi : {p.kappa_l_hz:.6e} Hz  (FWHM)",
-            f"kappa_i / 2pi : {p.kappa_i_hz:.6e} Hz",
-            f"kappa_c / 2pi : {p.kappa_c_hz:.6e} Hz",
         ]
+        if self.diagnostics.get("model") == "lorentzian":
+            lines += [
+                f"tau (cable)   : {p.tau:.6e} s",
+                f"amp (peak)    : {self.diagnostics.get('amp_s', float('nan')):.6e} s",
+                f"slope         : {self.diagnostics.get('slope_s', 0.0):.6e} s/Hz",
+                f"kappa_l / 2pi : {p.kappa_l_hz:.6e} Hz  (FWHM)",
+            ]
+        else:
+            lines += [
+                f"|Q_c|         : {p.absQc:.6e}",
+                f"Q_c (DCM)     : {p.Qc_dia_corr:.6e}",
+                f"Q_i (DCM)     : {p.Qi_dia_corr:.6e}"
+                + (f"  ± {e.get('Qi_dia_corr', float('nan')):.3e}" if "Qi_dia_corr" in e else ""),
+                f"Q_i (no corr) : {p.Qi_no_corr:.6e}",
+                f"phi           : {p.phi:.6f} rad",
+                f"a, alpha, tau : {p.a:.6e},  {p.alpha:.6f} rad,  {p.tau:.6e} s",
+                f"kappa_l / 2pi : {p.kappa_l_hz:.6e} Hz  (FWHM)",
+                f"kappa_i / 2pi : {p.kappa_i_hz:.6e} Hz",
+                f"kappa_c / 2pi : {p.kappa_c_hz:.6e} Hz",
+            ]
         return "\n".join(lines)
 
 
@@ -482,58 +493,174 @@ def _resolve_delay_sign(tau_g, geometry, sign):
 def fit_group_delay(
     f,
     tau_g,
-    geometry: str = "notch",
+    geometry: str = "auto",
     sign="auto",
+    model: str = "auto",
 ):
-    """Fit f_r, Q_l (and for a notch, |Q_c|, phi) from a group-delay trace.
+    """Fit f_r, Q_l from a group-delay trace (seconds, Hz).
 
-    ``tau_g`` in seconds, ``f`` in Hz.  IEEE definition
-    ``tau_g = -d arg(S) / d omega``.  The electrical delay is the baseline.
+    ``model``
+      * ``lorentzian`` — tau + slope*(f-fr) + A / (1+4 Q_l^2 (f/fr-1)^2).
+        Use this for a VNA **peak** (your 53672 traces).  Does not invent Q_c.
+      * ``sparam`` — derivative of the Probst S11/S21 model.  Needed for a
+        hanger **dip**.  Reflection near critical coupling is ill-posed
+        (S11→0, delay diverges) and is what produced the raised baseline.
+      * ``auto`` — peak → lorentzian, dip → sparam notch.
 
-    Identifiable from delay alone
-      * always: f_r, Q_l, tau (cable)
-      * notch: |Q_c|, phi, hence Q_i via DCM (from peak height / Fano skew)
-      * transmission: NOT Q_i or Q_c (delay Lorentzian independent of coupling)
-
-    Amplitude ``a`` and offset phase ``alpha`` do not enter tau_g.
+    ``geometry`` is used only for the sparam model: notch / transmission /
+    reflection.  ``auto`` picks notch for a dip and skips S-geometry for a peak.
     """
     f = np.asarray(f, dtype=float)
     tau_g = np.asarray(tau_g, dtype=float)
+    g = guess_from_group_delay(f, tau_g)
+    if model == "auto":
+        model = "lorentzian" if g["peak_is_positive"] else "sparam"
+    if geometry == "auto":
+        geometry = "notch" if not g["peak_is_positive"] else "transmission"
+    if model == "lorentzian":
+        return _fit_delay_lorentzian(f, tau_g, g)
     if geometry not in ("notch", "transmission", "reflection"):
         raise ValueError(geometry)
+    return _fit_delay_sparam(f, tau_g, g, geometry, sign)
+
+
+def _fit_delay_lorentzian(f, tau_g, g):
+    """Symmetric Lorentzian + linear baseline.  Five parameters, all seen in delay."""
+    fr0 = g["fr"]
+    Ql0 = g["Ql"]
+    tau0 = g["baseline"]
+    amp0 = g["amp"]
+    n_edge = max(len(f) // 15, 8)
+    slope0 = 0.0
+    if n_edge > 2:
+        slope0 = float(
+            np.polyfit(
+                np.concatenate([f[:n_edge], f[-n_edge:]]),
+                np.concatenate([tau_g[:n_edge], tau_g[-n_edge:]]),
+                1,
+            )[0]
+        )
+    fr_s = float(np.mean(f))
+    tau_s = max(abs(tau0), np.std(tau_g), 1e-12)
+    amp_s = max(abs(amp0), 1e-12)
+    slope_s = max(abs(slope0), amp_s / max(f[-1] - f[0], 1.0))
+    delay_s = max(float(np.std(tau_g)), 1e-12)
+    scales = np.array([fr_s, max(Ql0, 1.0), tau_s, amp_s, slope_s], dtype=float)
+    x0 = np.array([fr0, Ql0, tau0, amp0, slope0]) / scales
+
+    def unpack(xn):
+        fr, Ql, tau, amp, slope = xn * scales
+        return float(fr), abs(float(Ql)), float(tau), float(amp), float(slope)
+
+    def resid(xn):
+        fr, Ql, tau, amp, slope = unpack(xn)
+        return (delay_lorentzian(f, fr, Ql, tau, slope=slope, amp=amp) - tau_g) / delay_s
+
+    res = least_squares(
+        resid,
+        x0,
+        bounds=(
+            [0.5, 0.05, -50.0, -50.0, -50.0],
+            [1.5, 50.0, 50.0, 50.0, 50.0],
+        ),
+        xtol=1e-12,
+        ftol=1e-12,
+        gtol=1e-12,
+        max_nfev=800,
+    )
+    fr, Ql, tau, amp, slope = unpack(res.x)
+    model = delay_lorentzian(f, fr, Ql, tau, slope=slope, amp=amp)
+    amp_tied = Ql / (np.pi * fr)
+    params = ResonatorParams(
+        fr=fr,
+        Ql=Ql,
+        absQc=1e12,
+        phi=0.0,
+        a=1.0,
+        alpha=0.0,
+        tau=tau,
+        geometry="transmission",
+    )
+    rms = float(np.sqrt(np.mean((model - tau_g) ** 2)))
+    return FitResult(
+        params=params,
+        mode="group_delay",
+        success=bool(res.success),
+        message=(
+            "lorentzian delay peak; Q_c/Q_i are not identified; "
+            f"amp/amp_through={amp / amp_tied:.3f} (1 ≈ transmission S21)"
+        ),
+        diagnostics={
+            "rms_delay_s": rms,
+            "sign": 1.0,
+            "model": "lorentzian",
+            "amp_s": amp,
+            "slope_s": slope,
+            "amp_through_s": amp_tied,
+            "Ql_from_height": float(np.pi * fr * abs(amp)),
+            "baseline_s": g["baseline"],
+            "peak_is_positive": g["peak_is_positive"],
+            "tau_g_model": model,
+            "identifiable": ["fr", "Ql", "tau", "slope", "amp"],
+            "not_identifiable": ["Qc", "Qi", "a", "alpha"],
+        },
+    )
+
+
+def _fit_delay_sparam(f, tau_g, g, geometry, sign):
     sgn = _resolve_delay_sign(tau_g, geometry, sign)
-    g = guess_from_group_delay(f, tau_g)
     tau0 = -g["tau"] if sgn < 0 else g["tau"]
+    # Keep reflection away from S11=0 (Ql = |Qc|/2), which diverges delay.
+    absQc0 = g["absQc"]
+    if geometry == "reflection" and abs(g["Ql"] / max(absQc0, 1e-12) - 0.5) < 0.05:
+        absQc0 = 2.5 * g["Ql"]
     p0 = ResonatorParams(
         fr=g["fr"],
         Ql=g["Ql"],
-        absQc=g["absQc"],
+        absQc=absQc0,
         phi=0.0,
         a=1.0,
         alpha=0.0,
         tau=tau0,
         geometry=geometry,
     )
-    # fr, Ql, absQc, phi, tau  — a, alpha drop out of tau_g
     fr_s = float(np.mean(f))
     tau_s = max(abs(p0.tau), np.std(tau_g), 1e-12)
     delay_s = max(float(np.std(tau_g)), 1e-12)
-    scales = np.array(
-        [fr_s, max(p0.Ql, 1.0), max(p0.absQc, 1.0), 1.0, tau_s], dtype=float
-    )
-    x0 = np.array([p0.fr, p0.Ql, p0.absQc, p0.phi, p0.tau]) / scales
+    # transmission delay is independent of Qc and phi — do not fit them
+    if geometry == "transmission":
+        scales = np.array([fr_s, max(p0.Ql, 1.0), tau_s], dtype=float)
+        x0 = np.array([p0.fr, p0.Ql, p0.tau]) / scales
 
-    def unpack(xn):
-        fr, Ql, absQc, phi, tau = xn * scales
-        return ResonatorParams(
-            float(fr),
-            abs(float(Ql)),
-            abs(float(absQc)),
-            float(phi),
-            1.0,
-            0.0,
-            float(tau),
-            geometry,
+        def unpack(xn):
+            fr, Ql, tau = xn * scales
+            return ResonatorParams(
+                float(fr), abs(float(Ql)), 1e12, 0.0, 1.0, 0.0, float(tau), geometry
+            )
+
+        bounds = ([0.5, 0.05, -50.0], [1.5, 50.0, 50.0])
+    else:
+        scales = np.array(
+            [fr_s, max(p0.Ql, 1.0), max(p0.absQc, 1.0), 1.0, tau_s], dtype=float
+        )
+        x0 = np.array([p0.fr, p0.Ql, p0.absQc, p0.phi, p0.tau]) / scales
+
+        def unpack(xn):
+            fr, Ql, absQc, phi, tau = xn * scales
+            return ResonatorParams(
+                float(fr),
+                abs(float(Ql)),
+                abs(float(absQc)),
+                float(phi),
+                1.0,
+                0.0,
+                float(tau),
+                geometry,
+            )
+
+        bounds = (
+            [0.5, 0.05, 0.05, -np.pi, -50.0],
+            [1.5, 50.0, 50.0, np.pi, 50.0],
         )
 
     def resid(xn):
@@ -542,10 +669,7 @@ def fit_group_delay(
     res = least_squares(
         resid,
         x0,
-        bounds=(
-            [0.5, 0.05, 0.05, -np.pi, -50.0],
-            [1.5, 50.0, 50.0, np.pi, 50.0],
-        ),
+        bounds=bounds,
         xtol=1e-12,
         ftol=1e-12,
         gtol=1e-12,
@@ -554,9 +678,14 @@ def fit_group_delay(
     params = unpack(res.x)
     model = sgn * group_delay_model(f, params)
     rms = float(np.sqrt(np.mean((model - tau_g) ** 2)))
-    notes = [f"IEEE tau_g with display sign={sgn:g}"]
+    notes = [f"sparam {geometry}, IEEE sign={sgn:g}"]
     if geometry == "transmission":
         notes.append("through-line delay does not determine Q_c or Q_i")
+    if geometry == "reflection":
+        from .models import coupling_regime
+
+        notes.append("regime " + coupling_regime(geometry, params.Ql, params.absQc, params.phi))
+        notes.append("delay-only Q_c is weak; prefer lorentzian if the overlay is poor")
     notes.append("a and alpha are invisible in group delay")
     return FitResult(
         params=params,
@@ -566,15 +695,19 @@ def fit_group_delay(
         diagnostics={
             "rms_delay_s": rms,
             "sign": sgn,
+            "model": "sparam",
             "baseline_s": g["baseline"],
             "peak_is_positive": g["peak_is_positive"],
+            "tau_g_model": model,
             "identifiable": ["fr", "Ql", "tau"]
             + (["absQc", "phi", "Qi"] if geometry == "notch" else []),
         },
     )
 
 
-def fit_group_delay_vs_power(f, power, delay_2d, geometry: str = "notch", sign="auto"):
+def fit_group_delay_vs_power(
+    f, power, delay_2d, geometry: str = "auto", sign="auto", model: str = "auto"
+):
     """Fit each power slice of a (n_power, n_freq) delay map.
 
     Returns a list of FitResult (one per power) and a dict of arrays
@@ -593,7 +726,9 @@ def fit_group_delay_vs_power(f, power, delay_2d, geometry: str = "notch", sign="
             )
     results = []
     for i, pwr in enumerate(power):
-        r = fit_group_delay(f, delay_2d[i], geometry=geometry, sign=sign)
+        r = fit_group_delay(
+            f, delay_2d[i], geometry=geometry, sign=sign, model=model
+        )
         r.diagnostics["power_dBm"] = float(pwr)
         results.append(r)
     out = {
@@ -605,6 +740,7 @@ def fit_group_delay_vs_power(f, power, delay_2d, geometry: str = "notch", sign="
         "tau": np.array([r.params.tau for r in results]),
         "phi": np.array([r.params.phi for r in results]),
         "rms_delay_s": np.array([r.diagnostics["rms_delay_s"] for r in results]),
+        "amp_s": np.array([r.diagnostics.get("amp_s", np.nan) for r in results]),
     }
     return results, out
 

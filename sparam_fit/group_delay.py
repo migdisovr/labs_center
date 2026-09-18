@@ -90,6 +90,22 @@ def group_delay_model(f, p: ResonatorParams):
         return -np.imag(dS_df / S) / (2.0 * np.pi)
 
 
+def delay_lorentzian(f, fr, Ql, tau, slope=0.0, amp=None):
+    """Phenomenological group delay of a symmetric resonance (seconds).
+
+    tau_g(f) = tau + slope*(f - fr) + amp / (1 + 4 Q_l^2 (f/fr - 1)^2)
+
+    If ``amp`` is None it is tied to the through-line identity
+    amp = Q_l / (pi f_r).  A free ``amp`` is the right model for a
+    VNA delay peak when S11/S21 geometry is unknown.
+    """
+    f = np.asarray(f, dtype=float)
+    if amp is None:
+        amp = Ql / (np.pi * fr)
+    delta = f / fr - 1.0
+    return tau + slope * (f - fr) + amp / (1.0 + 4.0 * Ql**2 * delta**2)
+
+
 def group_delay_peak_scale(fr, Ql):
     """Through-resonator peak height above a zero baseline: Q_l / (pi f_r).
 
@@ -123,6 +139,7 @@ def guess_from_group_delay(f, tau_g):
         fwhm = float(0.1 * (f[-1] - f[0]))
     fwhm = max(fwhm, float(np.min(np.diff(f))))
     Ql = float(fr / fwhm)
+    Ql_from_height = float(np.pi * fr * abs(height)) if height != 0 else Ql
     # For a through line, extra delay at fr is Ql/(pi fr).
     # For a notch dip, extra is ~ -(Ql/(pi fr)) * d/(1-d).
     scale = group_delay_peak_scale(fr, Ql)
@@ -147,6 +164,8 @@ def guess_from_group_delay(f, tau_g):
         "peak_is_positive": peak_is_positive,
         "fwhm": fwhm,
         "geometry_guess": geometry_guess,
+        "Ql_from_height": Ql_from_height,
+        "amp": abs(height),
     }
 
 

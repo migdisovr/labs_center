@@ -14,6 +14,7 @@ from .models import (
     s11_reflection,
     quality_from_linewidth,
     linewidth_hz,
+    coupling_regime,
 )
 from .fit import (
     FitResult,
@@ -28,6 +29,7 @@ from .group_delay import (
     group_delay_from_s,
     group_delay_model,
     phase_from_group_delay,
+    delay_lorentzian,
 )
 
 __all__ = [
@@ -37,6 +39,7 @@ __all__ = [
     "s11_reflection",
     "quality_from_linewidth",
     "linewidth_hz",
+    "coupling_regime",
     "FitResult",
     "fit_circle",
     "fit_amp_phase",
@@ -47,4 +50,5 @@ __all__ = [
     "group_delay_from_s",
     "group_delay_model",
     "phase_from_group_delay",
+    "delay_lorentzian",
 ]

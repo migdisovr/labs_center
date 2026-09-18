@@ -147,3 +147,34 @@ def linewidth_hz(fr_hz: float, Q: float) -> float:
 def wrap_phase(phi):
     """Map angle(s) to (-pi, pi]."""
     return np.angle(np.exp(1j * np.asarray(phi, dtype=float)))
+
+
+def coupling_regime(geometry: Geometry, Ql: float, absQc: float, phi: float = 0.0) -> str:
+    """undercoupled / critical / overcoupled from loaded and coupling Q.
+
+    Energy rates κ = ω/Q.  Overcoupled means the port takes more energy per
+    cycle than internal loss: κ_c > κ_i, i.e. |Q_c| < Q_i.
+
+    Reflection (one-port S11)
+        Critical when Q_i = |Q_c|, hence Q_l = |Q_c|/2.  Then S11(f_r) = 0
+        and the resonance circle passes through the origin.
+    Notch / hanger (S21)
+        Same comparison of κ_c and κ_i after diameter correction.
+        Overcoupled: deep dip (diameter d = Q_l/|Q_c| closer to 1).
+    Transmission (two-port S21 peak)
+        Each port has its own Q_c; a single |Q_c| in this model is lumped.
+        Delay alone cannot decide over vs under.
+    """
+    cos = float(np.cos(phi))
+    inv_qc = cos / absQc if absQc else 0.0
+    inv_ql = 1.0 / Ql if Ql else 0.0
+    inv_qi = inv_ql - inv_qc
+    if inv_qi <= 0:
+        return "overcoupled"
+    qi = 1.0 / inv_qi
+    ratio = qi / absQc if absQc else np.inf
+    if abs(ratio - 1.0) < 0.08:
+        return "critical"
+    if geometry == "reflection":
+        return "overcoupled" if ratio > 1.0 else "undercoupled"
+    return "overcoupled" if ratio > 1.0 else "undercoupled"

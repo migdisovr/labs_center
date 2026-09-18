@@ -87,7 +87,22 @@ def plot_group_delay_fit(f, tau_g, result, title=None, save_path=None):
     f = np.asarray(f, dtype=float)
     tau_g = np.asarray(tau_g, dtype=float)
     sgn = result.diagnostics.get("sign", 1.0)
-    model = sgn * group_delay_model(f, result.params)
+    if result.diagnostics.get("tau_g_model") is not None:
+        model = np.asarray(result.diagnostics["tau_g_model"])
+    elif result.diagnostics.get("model") == "lorentzian":
+        from .group_delay import delay_lorentzian
+
+        d = result.diagnostics
+        model = delay_lorentzian(
+            f,
+            result.params.fr,
+            result.params.Ql,
+            result.params.tau,
+            slope=d.get("slope_s", 0.0),
+            amp=d.get("amp_s"),
+        )
+    else:
+        model = sgn * group_delay_model(f, result.params)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
     ax = axes[0]
     ax.plot(f * 1e-9, tau_g * 1e9, ".", ms=4, label="data")
