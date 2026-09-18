@@ -33,7 +33,7 @@ def main(out: Path):
     )
     f, s = make_trace(true, n=801, span_bw=12.0, snr=120, seed=7)
     tg_ieee = group_delay_from_s(f, s)
-    # qsweepy / VNA delay map in the user's screenshot is a *peak* (~50–400 ns)
+    # **** / VNA delay map in the user's screenshot is a *peak* (~50–400 ns)
     tg_display = -tg_ieee
 
     r = fit_group_delay(f, tg_display, geometry="notch")
