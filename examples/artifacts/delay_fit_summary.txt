@@ -1,0 +1,13 @@
+mode          : group_delay  (IEEE tau_g with display sign=-1; a and alpha are invisible in group delay)
+geometry      : notch
+f_r           : 6.858002e+09 Hz
+Q_l           : 6.491160e+03
+|Q_c|         : 1.098460e+04
+Q_c (DCM)     : 1.101641e+04
+Q_i (DCM)     : 1.580227e+04
+Q_i (no corr) : 1.586819e+04
+phi           : 0.076015 rad
+a, alpha, tau : 1.000000e+00,  0.000000 rad,  7.002975e-08 s
+kappa_l / 2pi : 1.056514e+06 Hz  (FWHM)
+kappa_i / 2pi : 4.339884e+05 Hz
+kappa_c / 2pi : 6.225258e+05 Hz

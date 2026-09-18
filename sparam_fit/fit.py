@@ -14,8 +14,12 @@ from .guess import (
     remove_delay,
 )
 from .models import ResonatorParams, model_s, wrap_phase
+from .group_delay import (
+    group_delay_model,
+    guess_from_group_delay,
+)
 
-Mode = Literal["circle", "amp_phase", "magnitude", "hybrid"]
+Mode = Literal["circle", "amp_phase", "magnitude", "hybrid", "group_delay"]
 
 
 @dataclass
@@ -452,3 +456,155 @@ def fit_hybrid(f, s, geometry: str = "notch"):
         "circle_params": r_c.params.as_dict(),
     }
     return best, r_ap, r_c
+
+
+def _peak_is_positive(tau_g):
+    tau_g = np.asarray(tau_g, dtype=float)
+    n_edge = max(len(tau_g) // 15, 8)
+    baseline = float(np.median(np.concatenate([tau_g[:n_edge], tau_g[-n_edge:]])))
+    detr = tau_g - baseline
+    return abs(float(detr.max())) >= abs(float(detr.min()))
+
+
+def _resolve_delay_sign(tau_g, geometry, sign):
+    if sign in (-1, 1, -1.0, 1.0):
+        return float(np.sign(sign) or 1.0)
+    peak_pos = _peak_is_positive(tau_g)
+    # IEEE notch S21 has a delay *dip*; many VNA/qsweepy traces are stored
+    # with the opposite sign and look like a peak.  Flip to match the data.
+    if geometry == "notch" and peak_pos:
+        return -1.0
+    if geometry in ("transmission", "reflection") and not peak_pos:
+        return -1.0
+    return 1.0
+
+
+def fit_group_delay(
+    f,
+    tau_g,
+    geometry: str = "notch",
+    sign="auto",
+):
+    """Fit f_r, Q_l (and for a notch, |Q_c|, phi) from a group-delay trace.
+
+    ``tau_g`` in seconds, ``f`` in Hz.  IEEE definition
+    ``tau_g = -d arg(S) / d omega``.  The electrical delay is the baseline.
+
+    Identifiable from delay alone
+      * always: f_r, Q_l, tau (cable)
+      * notch: |Q_c|, phi, hence Q_i via DCM (from peak height / Fano skew)
+      * transmission: NOT Q_i or Q_c (delay Lorentzian independent of coupling)
+
+    Amplitude ``a`` and offset phase ``alpha`` do not enter tau_g.
+    """
+    f = np.asarray(f, dtype=float)
+    tau_g = np.asarray(tau_g, dtype=float)
+    if geometry not in ("notch", "transmission", "reflection"):
+        raise ValueError(geometry)
+    sgn = _resolve_delay_sign(tau_g, geometry, sign)
+    g = guess_from_group_delay(f, tau_g)
+    tau0 = -g["tau"] if sgn < 0 else g["tau"]
+    p0 = ResonatorParams(
+        fr=g["fr"],
+        Ql=g["Ql"],
+        absQc=g["absQc"],
+        phi=0.0,
+        a=1.0,
+        alpha=0.0,
+        tau=tau0,
+        geometry=geometry,
+    )
+    # fr, Ql, absQc, phi, tau  — a, alpha drop out of tau_g
+    fr_s = float(np.mean(f))
+    tau_s = max(abs(p0.tau), np.std(tau_g), 1e-12)
+    delay_s = max(float(np.std(tau_g)), 1e-12)
+    scales = np.array(
+        [fr_s, max(p0.Ql, 1.0), max(p0.absQc, 1.0), 1.0, tau_s], dtype=float
+    )
+    x0 = np.array([p0.fr, p0.Ql, p0.absQc, p0.phi, p0.tau]) / scales
+
+    def unpack(xn):
+        fr, Ql, absQc, phi, tau = xn * scales
+        return ResonatorParams(
+            float(fr),
+            abs(float(Ql)),
+            abs(float(absQc)),
+            float(phi),
+            1.0,
+            0.0,
+            float(tau),
+            geometry,
+        )
+
+    def resid(xn):
+        return (sgn * group_delay_model(f, unpack(xn)) - tau_g) / delay_s
+
+    res = least_squares(
+        resid,
+        x0,
+        bounds=(
+            [0.5, 0.05, 0.05, -np.pi, -50.0],
+            [1.5, 50.0, 50.0, np.pi, 50.0],
+        ),
+        xtol=1e-12,
+        ftol=1e-12,
+        gtol=1e-12,
+        max_nfev=800,
+    )
+    params = unpack(res.x)
+    model = sgn * group_delay_model(f, params)
+    rms = float(np.sqrt(np.mean((model - tau_g) ** 2)))
+    notes = [f"IEEE tau_g with display sign={sgn:g}"]
+    if geometry == "transmission":
+        notes.append("through-line delay does not determine Q_c or Q_i")
+    notes.append("a and alpha are invisible in group delay")
+    return FitResult(
+        params=params,
+        mode="group_delay",
+        success=bool(res.success),
+        message="; ".join(notes),
+        diagnostics={
+            "rms_delay_s": rms,
+            "sign": sgn,
+            "baseline_s": g["baseline"],
+            "peak_is_positive": g["peak_is_positive"],
+            "identifiable": ["fr", "Ql", "tau"]
+            + (["absQc", "phi", "Qi"] if geometry == "notch" else []),
+        },
+    )
+
+
+def fit_group_delay_vs_power(f, power, delay_2d, geometry: str = "notch", sign="auto"):
+    """Fit each power slice of a (n_power, n_freq) delay map.
+
+    Returns a list of FitResult (one per power) and a dict of arrays
+    ``fr, Ql, Qi, tau, power`` for plotting vs drive.
+    """
+    f = np.asarray(f, dtype=float)
+    power = np.asarray(power, dtype=float)
+    delay_2d = np.asarray(delay_2d, dtype=float)
+    if delay_2d.shape != (len(power), len(f)):
+        if delay_2d.shape == (len(f), len(power)):
+            delay_2d = delay_2d.T
+        else:
+            raise ValueError(
+                f"delay shape {delay_2d.shape} does not match "
+                f"(n_power={len(power)}, n_freq={len(f)})"
+            )
+    results = []
+    for i, pwr in enumerate(power):
+        r = fit_group_delay(f, delay_2d[i], geometry=geometry, sign=sign)
+        r.diagnostics["power_dBm"] = float(pwr)
+        results.append(r)
+    out = {
+        "power": power,
+        "fr": np.array([r.params.fr for r in results]),
+        "Ql": np.array([r.params.Ql for r in results]),
+        "Qi": np.array([r.params.Qi_dia_corr for r in results]),
+        "absQc": np.array([r.params.absQc for r in results]),
+        "tau": np.array([r.params.tau for r in results]),
+        "phi": np.array([r.params.phi for r in results]),
+        "rms_delay_s": np.array([r.diagnostics["rms_delay_s"] for r in results]),
+    }
+    return results, out
+

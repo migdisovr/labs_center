@@ -21,6 +21,13 @@ from .fit import (
     fit_amp_phase,
     fit_magnitude_only,
     fit_hybrid,
+    fit_group_delay,
+    fit_group_delay_vs_power,
+)
+from .group_delay import (
+    group_delay_from_s,
+    group_delay_model,
+    phase_from_group_delay,
 )
 
 __all__ = [
@@ -35,4 +42,9 @@ __all__ = [
     "fit_amp_phase",
     "fit_magnitude_only",
     "fit_hybrid",
+    "fit_group_delay",
+    "fit_group_delay_vs_power",
+    "group_delay_from_s",
+    "group_delay_model",
+    "phase_from_group_delay",
 ]

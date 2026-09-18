@@ -78,3 +78,51 @@ def plot_delay_before_after(f, s, tau, save_path=None):
     if save_path:
         fig.savefig(save_path, dpi=140, bbox_inches="tight")
     return fig
+
+
+def plot_group_delay_fit(f, tau_g, result, title=None, save_path=None):
+    """Overlay measured group delay and the fitted model."""
+    from .group_delay import group_delay_model
+
+    f = np.asarray(f, dtype=float)
+    tau_g = np.asarray(tau_g, dtype=float)
+    sgn = result.diagnostics.get("sign", 1.0)
+    model = sgn * group_delay_model(f, result.params)
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    ax = axes[0]
+    ax.plot(f * 1e-9, tau_g * 1e9, ".", ms=4, label="data")
+    ax.plot(f * 1e-9, model * 1e9, "-", lw=1.5, label="fit")
+    ax.set_xlabel("f (GHz)")
+    ax.set_ylabel("group delay (ns)")
+    ax.legend()
+    ax.set_title("delay vs frequency")
+    ax = axes[1]
+    ax.axis("off")
+    txt = result.summary()
+    if title:
+        txt = title + "\n\n" + txt
+    ax.text(0.02, 0.98, txt, va="top", ha="left", family="monospace", fontsize=9)
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=140, bbox_inches="tight")
+    return fig
+
+
+def plot_delay_power_map(f, power, delay_2d, title=None, save_path=None):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    im = ax.pcolormesh(
+        np.asarray(f) * 1e-9,
+        np.asarray(power),
+        np.asarray(delay_2d) * 1e9,
+        shading="auto",
+        cmap="inferno",
+    )
+    cb = fig.colorbar(im, ax=ax)
+    cb.set_label("group delay (ns)")
+    ax.set_xlabel("f (GHz)")
+    ax.set_ylabel("power (dBm)")
+    ax.set_title(title or "delay vs frequency and power")
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=140, bbox_inches="tight")
+    return fig

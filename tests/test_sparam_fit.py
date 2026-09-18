@@ -82,3 +82,70 @@ def test_wrong_q_factor_of_two_is_not_used():
     q_wrong = fr / (2 * fwhm)
     assert q_correct == pytest.approx(2755.2, rel=1e-3)
     assert q_wrong < 0.6 * q_correct
+
+
+def test_group_delay_from_s_matches_model():
+    from sparam_fit.group_delay import group_delay_from_s, group_delay_model
+
+    f, s = make_trace(TRUE, n=801, span_bw=12.0, snr=None)
+    tg_num = group_delay_from_s(f, s)
+    tg_an = group_delay_model(f, TRUE)
+    err = np.nanmedian(np.abs(tg_num - tg_an))
+    assert err < 0.05 * abs(TRUE.tau)
+
+
+def test_group_delay_fit_recovers_fr_ql_tau():
+    from sparam_fit.group_delay import group_delay_model
+    from sparam_fit.fit import fit_group_delay
+
+    f, s = make_trace(TRUE, n=801, span_bw=12.0, snr=None)
+    # IEEE notch delay is a dip; qsweepy-like peak = minus that
+    tg = -group_delay_model(f, TRUE)
+    r = fit_group_delay(f, tg, geometry="notch")
+    assert r.diagnostics["sign"] == -1.0
+    assert r.params.fr == pytest.approx(TRUE.fr, rel=3e-5)
+    assert r.params.Ql == pytest.approx(TRUE.Ql, rel=0.08)
+    assert r.params.tau == pytest.approx(TRUE.tau, rel=0.15)
+
+
+def test_transmission_delay_peak_is_ql_over_pi_fr():
+    from sparam_fit.group_delay import group_delay_model, group_delay_peak_scale
+
+    p = ResonatorParams(
+        fr=6.858e9, Ql=7000, absQc=7000, phi=0.0, a=1.0, alpha=0.0, tau=70e-9,
+        geometry="transmission",
+    )
+    f = np.linspace(p.fr - 5 * p.fr / p.Ql, p.fr + 5 * p.fr / p.Ql, 2001)
+    tg = group_delay_model(f, p)
+    extra = tg[len(f)//2] - p.tau
+    assert extra == pytest.approx(group_delay_peak_scale(p.fr, p.Ql), rel=0.02)
+
+
+def test_orient_delay_sweep_swapped_axes():
+    from sparam_fit.group_delay import orient_delay_sweep
+
+    f = np.linspace(6.85e9, 6.86e9, 40)
+    p = np.linspace(-50, -10, 5)
+    z = np.arange(5 * 40, dtype=float).reshape(5, 40)
+    fo, po, zo = orient_delay_sweep(f, p, z)
+    assert np.allclose(fo, f) and np.allclose(po, p) and zo.shape == (5, 40)
+    fo, po, zo = orient_delay_sweep(p, f, z.T)
+    assert np.allclose(fo, f) and np.allclose(po, p) and zo.shape == (5, 40)
+
+
+def test_delay_power_map_shape():
+    from sparam_fit.group_delay import group_delay_model
+    from sparam_fit.fit import fit_group_delay_vs_power
+
+    f = np.linspace(6.85e9, 6.866e9, 301)
+    powers = np.array([-50.0, -30.0, -10.0])
+    traces = []
+    for Ql in (5000, 6000, 7000):
+        p = ResonatorParams(
+            fr=6.858e9, Ql=Ql, absQc=2 * Ql, phi=0.05, a=1, tau=60e-9, geometry="notch"
+        )
+        traces.append(-group_delay_model(f, p))
+    results, arr = fit_group_delay_vs_power(f, powers, np.vstack(traces), geometry="notch")
+    assert len(results) == 3
+    assert arr["Ql"][0] < arr["Ql"][-1]
+    assert arr["fr"][0] == pytest.approx(6.858e9, rel=1e-4)
