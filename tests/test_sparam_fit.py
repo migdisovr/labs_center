@@ -101,7 +101,7 @@ def test_group_delay_fit_recovers_fr_ql_tau():
     f, s = make_trace(TRUE, n=801, span_bw=12.0, snr=None)
     # IEEE notch delay is a dip; qsweepy-like peak = minus that
     tg = -group_delay_model(f, TRUE)
-    r = fit_group_delay(f, tg, geometry="notch")
+    r = fit_group_delay(f, tg, geometry="notch", model="sparam")
     assert r.diagnostics["sign"] == -1.0
     assert r.params.fr == pytest.approx(TRUE.fr, rel=3e-5)
     assert r.params.Ql == pytest.approx(TRUE.Ql, rel=0.08)
@@ -145,7 +145,37 @@ def test_delay_power_map_shape():
             fr=6.858e9, Ql=Ql, absQc=2 * Ql, phi=0.05, a=1, tau=60e-9, geometry="notch"
         )
         traces.append(-group_delay_model(f, p))
-    results, arr = fit_group_delay_vs_power(f, powers, np.vstack(traces), geometry="notch")
+    results, arr = fit_group_delay_vs_power(
+        f, powers, np.vstack(traces), geometry="notch", model="sparam"
+    )
     assert len(results) == 3
     assert arr["Ql"][0] < arr["Ql"][-1]
     assert arr["fr"][0] == pytest.approx(6.858e9, rel=1e-4)
+
+
+def test_lorentzian_recovers_peak_on_cable_baseline():
+    """Mimic experimental 53672: Lorentzian peak ~370 ns on ~95 ns shelf."""
+    from sparam_fit.group_delay import delay_lorentzian
+    from sparam_fit.fit import fit_group_delay
+
+    fr, Ql, tau = 6.95713e9, 6000.0, 95e-9
+    f = np.linspace(6.948e9, 6.967e9, 401)
+    tg = delay_lorentzian(f, fr, Ql, tau, slope=0.0, amp=Ql / (np.pi * fr))
+    rng = np.random.default_rng(0)
+    tg = tg + 3e-9 * rng.normal(size=f.size)
+    r = fit_group_delay(f, tg)  # auto → lorentzian
+    assert r.diagnostics["model"] == "lorentzian"
+    assert r.params.fr == pytest.approx(fr, rel=2e-5)
+    assert r.params.Ql == pytest.approx(Ql, rel=0.05)
+    assert r.params.tau == pytest.approx(tau, rel=0.08)
+    # reflection sparam must not be required for a good overlay
+    assert r.diagnostics["rms_delay_s"] < 6e-9
+
+
+def test_coupling_regime_reflection_critical():
+    from sparam_fit.models import coupling_regime
+
+    # Qi = Qc ⇒ Ql = Qc/2
+    assert coupling_regime("reflection", Ql=5000, absQc=10000) == "critical"
+    assert coupling_regime("reflection", Ql=4000, absQc=20000) == "undercoupled"
+    assert coupling_regime("reflection", Ql=4000, absQc=5000) == "overcoupled"

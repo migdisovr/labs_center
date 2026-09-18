@@ -1,0 +1,44 @@
+LORENTZIAN
+mode          : group_delay  (lorentzian delay peak; Q_c/Q_i are not identified; amp/amp_through=1.002 (1 ≈ transmission S21))
+geometry      : transmission
+f_r           : 6.957129e+09 Hz
+Q_l           : 5.992091e+03
+|Q_c|         : 1.000000e+12
+Q_c (DCM)     : 1.000000e+12
+Q_i (DCM)     : 5.992091e+03
+Q_i (no corr) : 5.992091e+03
+phi           : 0.000000 rad
+a, alpha, tau : 1.000000e+00,  0.000000 rad,  9.461993e-08 s
+kappa_l / 2pi : 1.161052e+06 Hz  (FWHM)
+kappa_i / 2pi : 1.161052e+06 Hz
+kappa_c / 2pi : 6.957129e-03 Hz
+
+REFLECTION SPARAM
+mode          : group_delay  (sparam reflection, IEEE sign=1; regime undercoupled; delay-only Q_c is weak; prefer lorentzian if the overlay is poor; a and alpha are invisible in group delay)
+geometry      : reflection
+f_r           : 6.956382e+09 Hz
+Q_l           : 1.822156e+03
+|Q_c|         : 6.890702e+05
+Q_c (DCM)     : -1.060058e+06
+Q_i (DCM)     : 1.819030e+03
+Q_i (no corr) : 1.826988e+03
+phi           : -2.278421 rad
+a, alpha, tau : 1.000000e+00,  0.000000 rad,  1.198796e-07 s
+kappa_l / 2pi : 3.817665e+06 Hz  (FWHM)
+kappa_i / 2pi : 3.824227e+06 Hz
+kappa_c / 2pi : -6.562266e+03 Hz
+
+NOTCH SPARAM
+mode          : group_delay  (sparam notch, IEEE sign=-1; a and alpha are invisible in group delay)
+geometry      : notch
+f_r           : 6.957317e+09 Hz
+Q_l           : 6.008384e+02
+|Q_c|         : 6.657531e+02
+Q_c (DCM)     : 6.661775e+02
+Q_i (DCM)     : 6.125959e+03
+Q_i (no corr) : 6.162082e+03
+phi           : -0.035697 rad
+a, alpha, tau : 1.000000e+00,  0.000000 rad,  -1.117580e-07 s
+kappa_l / 2pi : 1.157935e+07 Hz  (FWHM)
+kappa_i / 2pi : 1.135711e+06 Hz
+kappa_c / 2pi : 1.044364e+07 Hz

@@ -33,10 +33,10 @@ best, r_ap, r_c = fit_hybrid(freq_hz, s21)
 # magnitude-only (Ansys dB, or VNA without phase)
 r_m = fit_magnitude_only(freq_hz, mag, geometry="notch", mag_is_db=False)
 
-# 3) group delay only (VNA "Delay" / qsweepy delay map)
-#    tau_g is in seconds; electrical delay is the baseline of that trace
-r_d = fit_group_delay(freq_hz, tau_g_s, geometry="notch")
-results, vs_p = fit_group_delay_vs_power(freq_hz, power_dBm, delay_2d, geometry="notch")
+# 3) group delay (VNA Delay / qsweepy).  Peaks → Lorentzian by default.
+r_d = fit_group_delay(freq_hz, tau_g_s)  # model="auto"
+r_d = fit_group_delay(freq_hz, tau_g_s, model="lorentzian")
+results, vs_p = fit_group_delay_vs_power(freq_hz, power_dBm, delay_2d)
 print(best.summary())
 ```
 
