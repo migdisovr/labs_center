@@ -481,7 +481,7 @@ def _resolve_delay_sign(tau_g, geometry, sign):
     if sign in (-1, 1, -1.0, 1.0):
         return float(np.sign(sign) or 1.0)
     peak_pos = _peak_is_positive(tau_g)
-    # IEEE notch S21 has a delay *dip*; many VNA/qsweepy traces are stored
+    # IEEE notch S21 has a delay *dip*; many VNA/*** traces are stored
     # with the opposite sign and look like a peak.  Flip to match the data.
     if geometry == "notch" and peak_pos:
         return -1.0

@@ -7,7 +7,7 @@ Electrical delay ``tau`` (Probst environment)
     It contributes ``exp(-2 pi i f tau)`` to S and a *flat* offset
     ``tau`` to the group-delay trace.  This is what circle-fit removes.
 
-Group delay ``tau_g(f)`` (VNA format "Delay", qsweepy ``delay``)
+Group delay ``tau_g(f)`` (VNA format "Delay", **** ``delay``)
     The frequency derivative of the measured phase::
 
         tau_g(f) = - d arg(S) / d omega = - (1 / 2 pi) d arg(S) / df

@@ -99,7 +99,7 @@ def test_group_delay_fit_recovers_fr_ql_tau():
     from sparam_fit.fit import fit_group_delay
 
     f, s = make_trace(TRUE, n=801, span_bw=12.0, snr=None)
-    # IEEE notch delay is a dip; qsweepy-like peak = minus that
+    # IEEE notch delay is a dip; ****-like peak = minus that
     tg = -group_delay_model(f, TRUE)
     r = fit_group_delay(f, tg, geometry="notch", model="sparam")
     assert r.diagnostics["sign"] == -1.0

@@ -37,6 +37,10 @@ r_m = fit_magnitude_only(freq_hz, mag, geometry="notch", mag_is_db=False)
 r_d = fit_group_delay(freq_hz, tau_g_s)  # model="auto"
 r_d = fit_group_delay(freq_hz, tau_g_s, model="lorentzian")
 results, vs_p = fit_group_delay_vs_power(freq_hz, power_dBm, delay_2d)
+# 3) group delay only (VNA "Delay" / delay map)
+#    tau_g is in seconds; electrical delay is the baseline of that trace
+r_d = fit_group_delay(freq_hz, tau_g_s, geometry="notch")
+results, vs_p = fit_group_delay_vs_power(freq_hz, power_dBm, delay_2d, geometry="notch")
 print(best.summary())
 ```
 
