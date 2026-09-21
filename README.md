@@ -62,6 +62,10 @@ alias (`notch` → hanger×S21, `transmission` → through×S21,
 
 ## Notebook
 
+`notebooks/sparam_fit_library_tour.ipynb` — полный экскурс: физика, все
+публичные функции, три лабораторных случая, диагностика `FitResult`,
+вспомогательные методы (круг, guess, delay), лоренциан групповой задержки.
+
 `notebooks/Fit_FlipChip_Sparametr.ipynb` — original scratchpad plus Probst
 pipeline.  `notebooks/Fit_FlipChip_Sparametr_Actual.ipynb` — the working
 lab notebook, with a group-delay section at the bottom.
