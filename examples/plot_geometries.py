@@ -1,4 +1,4 @@
-"""Visual comparison of notch / transmission / reflection and coupling."""
+"""Visual comparison of the three formula-table rows and coupling regimes."""
 
 from pathlib import Path
 import sys
@@ -21,35 +21,40 @@ from sparam_fit.fit import fit_group_delay
 from sparam_fit.plots import plot_group_delay_fit
 
 
-def _params(geometry, fr, Ql, absQc, tau=0.0):
+def _params(layout, s_param, fr, Ql, absQc, tau=0.0):
     return ResonatorParams(
-        fr=fr, Ql=Ql, absQc=absQc, phi=0.0, a=1.0, tau=tau, geometry=geometry
+        fr=fr,
+        Ql=Ql,
+        absQc=absQc,
+        phi=0.0,
+        a=1.0,
+        tau=tau,
+        layout=layout,
+        s_param=s_param,
     )
 
 
 def plot_geometry_atlas(out: Path):
-    """|S|, complex plane, group delay for three layouts × two couplings."""
+    """|S|, complex plane, group delay for the three table rows × coupling."""
     fr = 6.957e9
     f = np.linspace(fr - 12e6, fr + 12e6, 1201)
-    # Same Ql.  Reflection: critical is absQc = 2 Ql.
-    # Notch: d = Ql/|Qc|; under d=0.3, over d=0.85.
     cases = [
-        ("notch", "undercoupled", 5000, 5000 / 0.30),
-        ("notch", "overcoupled", 5000, 5000 / 0.85),
-        ("transmission", "weak couple", 5000, 20000),
-        ("transmission", "strong couple", 5000, 6000),
-        ("reflection", "undercoupled", 4000, 20000),
-        ("reflection", "overcoupled", 4000, 6000),
+        ("hanger", "S21", "undercoupled", 5000, 5000 / 0.30),
+        ("hanger", "S21", "overcoupled", 5000, 5000 / 0.85),
+        ("through", "S21", "weak couple", 5000, 20000),
+        ("through", "S21", "strong couple", 5000, 6000),
+        ("hanger", "S11", "undercoupled", 4000, 20000),
+        ("hanger", "S11", "overcoupled", 4000, 6000),
     ]
     fig, axes = plt.subplots(len(cases), 3, figsize=(12, 14))
-    for i, (geom, label, Ql, Qc) in enumerate(cases):
-        p = _params(geom, fr, Ql, Qc, tau=80e-9)
+    for i, (layout, s_param, label, Ql, Qc) in enumerate(cases):
+        p = _params(layout, s_param, fr, Ql, Qc, tau=80e-9)
         s = model_s(f, p)
         tg = group_delay_model(f, p)
-        regime = coupling_regime(geom, Ql, Qc)
+        regime = coupling_regime(Ql, Qc, layout=layout, s_param=s_param)
         axes[i, 0].plot(f * 1e-9, 20 * np.log10(np.abs(s) + 1e-12))
         axes[i, 0].set_ylabel("|S| (dB)")
-        axes[i, 0].set_title(f"{geom}  {label}  [{regime}]")
+        axes[i, 0].set_title(f"{layout}×{s_param}  {label}  [{regime}]")
         axes[i, 1].plot(s.real, s.imag)
         axes[i, 1].plot(0, 0, "k+", ms=8)
         axes[i, 1].set_aspect("equal", adjustable="datalim")
@@ -61,9 +66,9 @@ def plot_geometry_atlas(out: Path):
             axes[i, 0].set_xlabel("f (GHz)")
             axes[i, 2].set_xlabel("f (GHz)")
     fig.suptitle(
-        "S11 = reflection;  S21 hanger = notch;  S21 peak = transmission\n"
+        "hanger×S21 = notch;  through×S21 = peak;  hanger×S11 = reflection\n"
         "overcoupled: circle encloses 0 (S11) or deep dip (notch).  "
-        "Transmission delay is independent of Qc.",
+        "Through delay is independent of Qc.",
         fontsize=11,
     )
     fig.tight_layout()
@@ -73,7 +78,7 @@ def plot_geometry_atlas(out: Path):
 
 
 def plot_why_sparam_fails_on_vna_peak(out: Path):
-    """Reproduce the user's overlay: true Lorentzian vs reflection S-model."""
+    """A free-amp Lorentzian delay peak is not the S11 (or S21) derivative."""
     fr, Ql, tau = 6.95713e9, 6000.0, 95e-9
     f = np.linspace(6.948e9, 6.967e9, 401)
     amp = Ql / (np.pi * fr)
@@ -81,9 +86,11 @@ def plot_why_sparam_fails_on_vna_peak(out: Path):
     rng = np.random.default_rng(1)
     tg = tg + 4e-9 * rng.normal(size=f.size)
 
-    r_lor = fit_group_delay(f, tg, model="lorentzian")
-    r_ref = fit_group_delay(f, tg, geometry="reflection", model="sparam")
-    r_not = fit_group_delay(f, tg, geometry="notch", model="sparam")
+    r_lor = fit_group_delay(f, tg)
+    p_s11 = _params("hanger", "S11", fr, Ql, 2.5 * Ql, tau=tau)
+    p_s21 = _params("hanger", "S21", fr, Ql, Ql / 0.5, tau=tau)
+    tg_s11 = group_delay_model(f, p_s11)
+    tg_s21 = group_delay_model(f, p_s21)
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
     ax.plot(f * 1e-9, tg * 1e9, ".", ms=4, label="data (Lorentzian+noise)")
@@ -96,19 +103,19 @@ def plot_why_sparam_fails_on_vna_peak(out: Path):
     )
     ax.plot(
         f * 1e-9,
-        r_ref.diagnostics["tau_g_model"] * 1e9,
+        tg_s11 * 1e9,
         "--",
-        label=f"S11 reflection  Ql={r_ref.params.Ql:.0f}  tau={r_ref.params.tau*1e9:.1f} ns",
+        label="hanger×S11 derivative (same fr, Ql; not a delay fit)",
     )
     ax.plot(
         f * 1e-9,
-        r_not.diagnostics["tau_g_model"] * 1e9,
+        tg_s21 * 1e9,
         ":",
-        label=f"S21 notch (sign auto)  Ql={r_not.params.Ql:.0f}",
+        label="hanger×S21 derivative (IEEE dip)",
     )
     ax.set_xlabel("f (GHz)")
     ax.set_ylabel("group delay (ns)")
-    ax.set_title("Why the S-parameter delay model misses a VNA peak")
+    ax.set_title("Delay-only data: fit the Lorentzian, not an S-derivative")
     ax.legend(fontsize=8)
     fig.tight_layout()
     path = out / "delay_lorentzian_vs_sparam.png"
@@ -116,21 +123,15 @@ def plot_why_sparam_fails_on_vna_peak(out: Path):
     plot_group_delay_fit(
         f, tg, r_lor, title="lorentzian (use this on 53672)", save_path=out / "delay_lorentzian_fit.png"
     )
-    return path, r_lor, r_ref, r_not
+    return path, r_lor
 
 
 def main(out: Path):
     out.mkdir(parents=True, exist_ok=True)
     plot_geometry_atlas(out)
-    _, r_lor, r_ref, r_not = plot_why_sparam_fails_on_vna_peak(out)
+    _, r_lor = plot_why_sparam_fails_on_vna_peak(out)
     (out / "geometry_and_delay_notes.txt").write_text(
-        "LORENTZIAN\n"
-        + r_lor.summary()
-        + "\n\nREFLECTION SPARAM\n"
-        + r_ref.summary()
-        + "\n\nNOTCH SPARAM\n"
-        + r_not.summary()
-        + "\n"
+        "LORENTZIAN (delay-only; Qi not identified)\n" + r_lor.summary() + "\n"
     )
     print(r_lor.summary())
     print("wrote", out)

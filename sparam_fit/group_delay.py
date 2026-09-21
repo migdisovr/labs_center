@@ -7,15 +7,15 @@ Electrical delay ``tau`` (Probst environment)
     It contributes ``exp(-2 pi i f tau)`` to S and a *flat* offset
     ``tau`` to the group-delay trace.  This is what circle-fit removes.
 
-Group delay ``tau_g(f)`` (VNA format "Delay", **** ``delay``)
+Group delay ``tau_g(f)`` (VNA format "Delay", qsweepy ``delay``)
     The frequency derivative of the measured phase::
 
         tau_g(f) = - d arg(S) / d omega = - (1 / 2 pi) d arg(S) / df
 
     with ``arg`` in radians and ``f`` in hertz.  Near a resonance it has a
-    Lorentzian peak (through / reflection) or dip (notch S21, anomalous
-    dispersion).  Peak width encodes ``Q_l``, peak position encodes ``f_r``,
-    baseline encodes the electrical delay.
+    Lorentzian peak (S11 / through S21) or dip (hanger S21).  Peak width
+    encodes ``Q_l``, peak position encodes ``f_r``, baseline encodes the
+    electrical delay.
 
 Amplitude cannot be reconstructed from ``tau_g`` alone.  Phase can::
 
@@ -35,7 +35,8 @@ def group_delay_from_s(f, s, method: str = "analytic_diff"):
     ``method='unwrap'`` uses ``gradient(unwrap(angle(S)))`` and is what most
     measurement software does.  ``analytic_diff`` uses
     ``-Im((dS/df)/S)/(2 pi)``, which is the same quantity but survives a
-    2 pi wrap; it still blows up if S passes through the origin (deep notch).
+    2 pi wrap; it still blows up if S passes through the origin (deep notch
+    or critical S11).
     """
     f = np.asarray(f, dtype=float)
     s = np.asarray(s, dtype=np.complex128)
@@ -62,24 +63,25 @@ def phase_from_group_delay(f, tau_g, alpha=0.0):
 
 
 def _dS_df(f, p: ResonatorParams):
-    """Analytic dS/df of the Probst notch / transmission / reflection model."""
+    """Analytic dS/df of the layout × s_param formula table."""
     f = np.asarray(f, dtype=float)
     env = p.a * np.exp(1j * p.alpha) * np.exp(-2j * np.pi * f * p.tau)
     denv_df = env * (-2j * np.pi * p.tau)
     D = 1.0 + 2j * p.Ql * (f / p.fr - 1.0)
     dD_df = 2j * p.Ql / p.fr
     beta = (p.Ql / np.abs(p.absQc)) * np.exp(1j * p.phi)
-    if p.geometry == "transmission":
+    kind = p.formula
+    if kind == "through":
         R = beta / D
         dR_df = -beta * dD_df / D**2
-    elif p.geometry == "notch":
+    elif kind == "notch":
         R = 1.0 - beta / D
         dR_df = beta * dD_df / D**2
-    elif p.geometry == "reflection":
+    elif kind == "reflection":
         R = 1.0 - 2.0 * beta / D
         dR_df = 2.0 * beta * dD_df / D**2
     else:
-        raise ValueError(p.geometry)
+        raise ValueError(kind)
     return denv_df * R + env * dR_df, env * R
 
 
@@ -97,7 +99,8 @@ def delay_lorentzian(f, fr, Ql, tau, slope=0.0, amp=None):
 
     If ``amp`` is None it is tied to the through-line identity
     amp = Q_l / (pi f_r).  A free ``amp`` is the right model for a
-    VNA delay peak when S11/S21 geometry is unknown.
+    VNA delay peak when S11/S21 is unknown.  A hanger S21 dip has
+    negative ``amp``.
     """
     f = np.asarray(f, dtype=float)
     if amp is None:
@@ -140,32 +143,16 @@ def guess_from_group_delay(f, tau_g):
     fwhm = max(fwhm, float(np.min(np.diff(f))))
     Ql = float(fr / fwhm)
     Ql_from_height = float(np.pi * fr * abs(height)) if height != 0 else Ql
-    # For a through line, extra delay at fr is Ql/(pi fr).
-    # For a notch dip, extra is ~ -(Ql/(pi fr)) * d/(1-d).
-    scale = group_delay_peak_scale(fr, Ql)
-    if peak_is_positive:
-        # prefer transmission-like start; d ~ 0.5 also gives similar height for notch if inverted
-        d = 0.5
-        geometry_guess = "transmission"
-    else:
-        # height ≈ -scale * d/(1-d)  =>  d/(1-d) ≈ -height/scale
-        ratio = max(-height / max(scale, 1e-30), 0.05)
-        d = float(ratio / (1.0 + ratio))
-        d = min(max(d, 0.05), 0.95)
-        geometry_guess = "notch"
-    absQc = Ql / max(d, 0.05)
     return {
         "fr": fr,
         "Ql": Ql,
-        "absQc": float(absQc),
         "tau": baseline,
         "height": height,
         "baseline": baseline,
         "peak_is_positive": peak_is_positive,
         "fwhm": fwhm,
-        "geometry_guess": geometry_guess,
         "Ql_from_height": Ql_from_height,
-        "amp": abs(height),
+        "amp": height,
     }
 
 
@@ -188,7 +175,6 @@ def orient_delay_sweep(p0, p1, data):
     elif is_freq(p1) and not is_freq(p0):
         f, power = p1, p0
     else:
-        # fall back: longer-range axis that looks like Hz
         f, power = (p0, p1) if p0.ptp() > p1.ptp() else (p1, p0)
 
     if data.shape == (len(power), len(f)):

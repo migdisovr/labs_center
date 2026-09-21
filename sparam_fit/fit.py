@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import warnings
+from dataclasses import dataclass, field, replace
 from typing import Literal, Optional
 
 import numpy as np
@@ -13,10 +14,16 @@ from .guess import (
     refine_delay_circle,
     remove_delay,
 )
-from .models import ResonatorParams, model_s, wrap_phase
+from .models import (
+    ResonatorParams,
+    absQc_from_canonical_radius,
+    formula_name,
+    model_s,
+    resolve_layout_sparam,
+    wrap_phase,
+)
 from .group_delay import (
     delay_lorentzian,
-    group_delay_model,
     guess_from_group_delay,
 )
 
@@ -41,19 +48,24 @@ class FitResult:
         e = self.errors
         lines = [
             f"mode          : {self.mode}  ({self.message})",
-            f"geometry      : {p.geometry}",
-            f"f_r           : {p.fr:.6e} Hz" + (f"  ± {e['fr']:.3e}" if "fr" in e else ""),
-            f"Q_l           : {p.Ql:.6e}" + (f"  ± {e['Ql']:.3e}" if "Ql" in e else ""),
         ]
         if self.diagnostics.get("model") == "lorentzian":
             lines += [
+                "layout/s_param: not identified from delay-only data",
+                f"f_r           : {p.fr:.6e} Hz" + (f"  ± {e['fr']:.3e}" if "fr" in e else ""),
+                f"Q_l           : {p.Ql:.6e}" + (f"  ± {e['Ql']:.3e}" if "Ql" in e else ""),
                 f"tau (cable)   : {p.tau:.6e} s",
                 f"amp (peak)    : {self.diagnostics.get('amp_s', float('nan')):.6e} s",
                 f"slope         : {self.diagnostics.get('slope_s', 0.0):.6e} s/Hz",
                 f"kappa_l / 2pi : {p.kappa_l_hz:.6e} Hz  (FWHM)",
+                "Q_i / Q_c     : not identified from delay-only data",
             ]
         else:
             lines += [
+                f"layout        : {p.layout}",
+                f"s_param       : {p.s_param}  (formula {p.formula})",
+                f"f_r           : {p.fr:.6e} Hz" + (f"  ± {e['fr']:.3e}" if "fr" in e else ""),
+                f"Q_l           : {p.Ql:.6e}" + (f"  ± {e['Ql']:.3e}" if "Ql" in e else ""),
                 f"|Q_c|         : {p.absQc:.6e}",
                 f"Q_c (DCM)     : {p.Qc_dia_corr:.6e}",
                 f"Q_i (DCM)     : {p.Qi_dia_corr:.6e}"
@@ -72,7 +84,7 @@ def _pack_full(p: ResonatorParams):
     return np.array([p.fr, p.Ql, p.absQc, p.phi, p.a, p.alpha, p.tau], dtype=float)
 
 
-def _unpack_full(x, geometry) -> ResonatorParams:
+def _unpack_full(x, layout, s_param) -> ResonatorParams:
     return ResonatorParams(
         fr=float(x[0]),
         Ql=float(x[1]),
@@ -81,7 +93,8 @@ def _unpack_full(x, geometry) -> ResonatorParams:
         a=float(x[4]),
         alpha=float(x[5]),
         tau=float(x[6]),
-        geometry=geometry,
+        layout=layout,
+        s_param=s_param,
     )
 
 
@@ -100,8 +113,8 @@ def _scales(p0: ResonatorParams, f):
     )
 
 
-def _complex_resid(xn, scales, f, s, geometry):
-    p = _unpack_full(xn * scales, geometry)
+def _complex_resid(xn, scales, f, s, layout, s_param):
+    p = _unpack_full(xn * scales, layout, s_param)
     m = model_s(f, p)
     return np.concatenate([(m - s).real, (m - s).imag])
 
@@ -130,22 +143,37 @@ def _errors_from_cov(cov, scales, names):
     return {n: float(e) for n, e in zip(names, err)}
 
 
-def _initial_params(f, s, geometry, tau=None) -> ResonatorParams:
+def _diameter_guess(g, layout, s_param):
+    """Start |Qc| from |S| min/max.  Diameter depends on the S formula."""
+    a = g["a"]
+    kind = formula_name(layout, s_param)
+    if kind == "notch":
+        d = max(1.0 - g["depth"] / max(a, 1e-30), 0.05)
+        d = min(d, 0.995)
+        return g["Ql"] / d
+    if kind == "reflection":
+        # Off-res |S11| ≈ a; on-res |1 − 2 Ql/|Qc||.  Diameter = 2 Ql/|Qc|.
+        dip = max(1.0 - g["depth"] / max(a, 1e-30), 0.05)
+        diameter = min(max(dip, 0.05), 1.95)
+        return 2.0 * g["Ql"] / diameter
+    # through: peak height a_peak ≈ a * Ql/|Qc|; edge baseline is ~0 so g["a"]
+    # is not the environment gain.  Use depth as a * Ql/|Qc| with a=1 start.
+    d = min(max(g["depth"] / max(a, 1e-30), 0.05), 5.0)
+    return g["Ql"] / d
+
+
+def _initial_params(f, s, layout, s_param, tau=None) -> ResonatorParams:
     mag = np.abs(s)
     g = guess_from_magnitude(f, mag)
     if tau is None:
         tau, _, _ = guess_delay_linear(f, s)
         tau = refine_delay_circle(f, s, tau)
     a = g["a"]
-    # diameter estimate: for notch, d ≈ 1 - |S|_min / a
-    if g["is_notch"] or geometry == "notch":
-        d = max(1.0 - g["depth"] / max(a, 1e-30), 0.05)
-        d = min(d, 0.995)
-    else:
-        d = min(max(g["depth"] / max(a, 1e-30), 0.05), 5.0)
-    absQc = g["Ql"] / d if d > 0 else 2.0 * g["Ql"]
+    kind = formula_name(layout, s_param)
+    if kind == "through":
+        a = max(g["depth"], 1e-12)
+    absQc = _diameter_guess(g, layout, s_param)
     z = remove_delay(f, s, tau)
-    # environment phase from off-resonance mean
     n_edge = max(len(f) // 20, 5)
     alpha = float(np.angle(np.mean(np.concatenate([z[:n_edge], z[-n_edge:]]))))
     return ResonatorParams(
@@ -156,7 +184,8 @@ def _initial_params(f, s, geometry, tau=None) -> ResonatorParams:
         a=a,
         alpha=alpha,
         tau=float(tau),
-        geometry=geometry,
+        layout=layout,
+        s_param=s_param,
     )
 
 
@@ -169,8 +198,21 @@ def fit_delay(f, s, tau0=None):
     return tau, remove_delay(f, s, tau)
 
 
-def fit_circle(f, s, geometry: str = "notch", tau: float | None = None, refine_model: bool = True):
+def fit_circle(
+    f,
+    s,
+    layout: str = "hanger",
+    s_param: str = "S21",
+    tau: float | None = None,
+    refine_model: bool = True,
+    geometry: str | None = None,
+):
     """Probst/Ustinov circle-fit pipeline on complex S-data.
+
+    Default ``layout='hanger', s_param='S21'`` is the matched hanger notch
+    (Probst eq. 1).  For hanger S11 with a shorted/open far end pass
+    ``s_param='S11'`` — the canonical radius then maps to |Qc| as Ql/r0,
+    not Ql/(2 r0).
 
     Steps (paper sec. III–IV):
       1. Estimate / refine electrical delay so the locus is circular.
@@ -180,6 +222,7 @@ def fit_circle(f, s, geometry: str = "notch", tau: float | None = None, refine_m
       5. Diameter-corrected Qc, Qi (Khalil DCM).
       6. Optional nonlinear polish of the full complex model.
     """
+    layout, s_param = resolve_layout_sparam(layout, s_param, geometry)
     f = np.asarray(f, dtype=float)
     s = np.asarray(s, dtype=np.complex128)
     tau, z = fit_delay(f, s, tau)
@@ -210,17 +253,23 @@ def fit_circle(f, s, geometry: str = "notch", tau: float | None = None, refine_m
     a = float(np.abs(p_off))
     alpha = float(np.angle(p_off))
 
-    # Canonical circle (environment stripped)
     z_can = z / (a * np.exp(1j * alpha)) if a > 0 else z
     xc2, yc2, r02 = fit_circle_algebraic(z_can, refine=True)
-    # After canonicalization P → 1, φ = -arcsin(yc/r)
     r02 = max(r02, 1e-12)
     arg = np.clip(yc2 / r02, -1.0, 1.0)
     phi = float(-np.arcsin(arg))
-    absQc = float(Ql / (2.0 * r02))
+    absQc = absQc_from_canonical_radius(Ql, r02, layout, s_param)
 
     params = ResonatorParams(
-        fr=fr, Ql=Ql, absQc=absQc, phi=phi, a=a, alpha=alpha, tau=tau, geometry=geometry
+        fr=fr,
+        Ql=Ql,
+        absQc=absQc,
+        phi=phi,
+        a=a,
+        alpha=alpha,
+        tau=tau,
+        layout=layout,
+        s_param=s_param,
     )
     if refine_model:
         params = _polish_complex(f, s, params)
@@ -263,24 +312,25 @@ def _polish_complex(f, s, p0: ResonatorParams) -> ResonatorParams:
     x0 = _pack_full(p0) / scales
     lo = np.array([0.5, 0.05, 0.05, -np.pi, 0.05, -np.pi, -50.0])
     hi = np.array([1.5, 50.0, 50.0, np.pi, 50.0, np.pi, 50.0])
-    # delay / a relative bounds around current guess
     res = least_squares(
-        lambda xn: _complex_resid(xn, scales, f, s, p0.geometry),
+        lambda xn: _complex_resid(xn, scales, f, s, p0.layout, p0.s_param),
         x0,
         bounds=(lo, hi),
         xtol=1e-12,
         ftol=1e-12,
         max_nfev=400,
     )
-    return _unpack_full(res.x * scales, p0.geometry)
+    return _unpack_full(res.x * scales, p0.layout, p0.s_param)
 
 
 def fit_amp_phase(
     f,
     s,
-    geometry: str = "notch",
+    layout: str = "hanger",
+    s_param: str = "S21",
     tau: float | None = None,
     freeze_env_in_amp: bool = True,
+    geometry: str | None = None,
 ):
     """Sequential amplitude → phase → joint complex fit.
 
@@ -294,13 +344,12 @@ def fit_amp_phase(
       * Compare residuals with circular phase distance, never unwrap(model)
         minus unwrap(data) (independent 2pi jumps).
     """
+    layout, s_param = resolve_layout_sparam(layout, s_param, geometry)
     f = np.asarray(f, dtype=float)
     s = np.asarray(s, dtype=np.complex128)
-    p0 = _initial_params(f, s, geometry, tau=tau)
+    p0 = _initial_params(f, s, layout, s_param, tau=tau)
 
-    # --- 1. amplitude: a, fr, Ql, absQc, phi ---
     mag = np.abs(s)
-    amp_names = ["fr", "Ql", "absQc", "phi", "a"]
     scales_a = np.array(
         [float(np.mean(f)), max(p0.Ql, 1.0), max(p0.absQc, 1.0), 1.0, max(p0.a, 1e-12)]
     )
@@ -310,7 +359,17 @@ def fit_amp_phase(
         fr, Ql, absQc, phi, a = xn * scales_a
         m = model_s(
             f,
-            ResonatorParams(fr, abs(Ql), abs(absQc), phi, abs(a), p0.alpha, p0.tau, geometry),
+            ResonatorParams(
+                fr,
+                abs(Ql),
+                abs(absQc),
+                phi,
+                abs(a),
+                p0.alpha,
+                p0.tau,
+                layout,
+                s_param,
+            ),
         )
         return np.abs(m) - mag
 
@@ -325,30 +384,42 @@ def fit_amp_phase(
         ftol=1e-12,
     )
     fr, Ql, absQc, phi, a = ra.x * scales_a
-    p_amp = ResonatorParams(float(fr), abs(float(Ql)), abs(float(absQc)), float(phi), abs(float(a)), p0.alpha, p0.tau, geometry)
+    p_amp = ResonatorParams(
+        float(fr),
+        abs(float(Ql)),
+        abs(float(absQc)),
+        float(phi),
+        abs(float(a)),
+        p0.alpha,
+        p0.tau,
+        layout,
+        s_param,
+    )
 
-    # --- 2. phase with resonator params held, then release Ql, fr, phi ---
     z = remove_delay(f, s, p_amp.tau)
-    # alpha from edges after delay removal
     n_edge = max(len(f) // 20, 5)
-    p_amp.alpha = float(np.angle(np.mean(np.concatenate([z[:n_edge], z[-n_edge:]]))))
+    p_amp = replace(
+        p_amp,
+        alpha=float(np.angle(np.mean(np.concatenate([z[:n_edge], z[-n_edge:]])))),
+    )
 
     def resid_ph_env(xn):
         alpha, tau = xn
-        m = model_s(
-            f,
-            ResonatorParams(p_amp.fr, p_amp.Ql, p_amp.absQc, p_amp.phi, p_amp.a, alpha, tau, geometry),
-        )
+        m = model_s(f, replace(p_amp, alpha=alpha, tau=tau))
         return _phase_resid(m, s)
 
-    rp = least_squares(resid_ph_env, [p_amp.alpha, p_amp.tau], xtol=1e-12, ftol=1e-12, max_nfev=200)
-    p_amp.alpha, p_amp.tau = float(rp.x[0]), float(rp.x[1])
+    rp = least_squares(
+        resid_ph_env, [p_amp.alpha, p_amp.tau], xtol=1e-12, ftol=1e-12, max_nfev=200
+    )
+    p_amp = replace(p_amp, alpha=float(rp.x[0]), tau=float(rp.x[1]))
 
     def resid_ph_all(xn):
         fr, Ql, absQc, phi, alpha, tau = xn
         m = model_s(
             f,
-            ResonatorParams(fr, abs(Ql), abs(absQc), phi, p_amp.a, alpha, tau, geometry),
+            ResonatorParams(
+                fr, abs(Ql), abs(absQc), phi, p_amp.a, alpha, tau, layout, s_param
+            ),
         )
         return _phase_resid(m, s)
 
@@ -356,14 +427,22 @@ def fit_amp_phase(
     rp2 = least_squares(resid_ph_all, x0p, xtol=1e-12, ftol=1e-12, max_nfev=300)
     fr, Ql, absQc, phi, alpha, tau = rp2.x
     p_ph = ResonatorParams(
-        float(fr), abs(float(Ql)), abs(float(absQc)), float(phi), p_amp.a, float(alpha), float(tau), geometry
+        float(fr),
+        abs(float(Ql)),
+        abs(float(absQc)),
+        float(phi),
+        p_amp.a,
+        float(alpha),
+        float(tau),
+        layout,
+        s_param,
     )
 
-    # --- 3. joint complex polish (hybrid) ---
     p_fin = _polish_complex(f, s, p_ph)
     m = model_s(f, p_fin)
     z = remove_delay(f, s, p_fin.tau)
     xc, yc, r0 = fit_circle_algebraic(z)
+    _ = freeze_env_in_amp
     return FitResult(
         params=p_fin,
         mode="amp_phase",
@@ -380,33 +459,46 @@ def fit_amp_phase(
     )
 
 
-def fit_magnitude_only(f, mag, geometry: str = "notch", mag_is_db: bool = False):
-    """Fit when only |S21| (or dB) is available.
+def fit_magnitude_only(
+    f,
+    mag,
+    layout: str = "hanger",
+    s_param: str = "S21",
+    mag_is_db: bool = False,
+    geometry: str | None = None,
+):
+    """Fit when only |S| (or dB) is available.
 
-    Identifiable: a, fr, Ql, |Qc|, phi (Fano skew).
+    Identifiable: a, fr, Ql, |Qc|, phi (Fano skew) for hanger S21 / S11.
     Not identifiable: tau, alpha.
-    Transmission geometry: a and |Qc| remain degenerate (no off-resonant
-    baseline at 1); report the product a*Ql/|Qc| as peak amplitude.
+    Through S21: a and |Qc| remain degenerate (no off-resonant baseline at 1);
+    report the product a*Ql/|Qc| as peak amplitude.  Qi is not trustworthy.
+
+    The formula is taken from ``layout`` × ``s_param``.  A peak vs dip in
+    |S| does **not** silently switch the model.
     """
+    layout, s_param = resolve_layout_sparam(layout, s_param, geometry)
     f = np.asarray(f, dtype=float)
     mag = np.asarray(mag, dtype=float)
     if mag_is_db:
         mag = 10 ** (mag / 20.0)
     g = guess_from_magnitude(f, mag)
-    if geometry == "transmission" or not g["is_notch"]:
-        geometry = "transmission" if not g["is_notch"] else geometry
-    a = g["a"] if geometry == "notch" else max(g["depth"], 1e-12)
-    d = max(abs(1.0 - g["depth"] / max(g["a"], 1e-30)), 0.05) if geometry == "notch" else 1.0
-    absQc = g["Ql"] / d
-    p0 = ResonatorParams(g["fr"], g["Ql"], absQc, 0.0, a, 0.0, 0.0, geometry)
-    scales = np.array([float(np.mean(f)), max(p0.Ql, 1.0), max(p0.absQc, 1.0), 1.0, max(p0.a, 1e-12)])
+    kind = formula_name(layout, s_param)
+    a = g["a"] if kind != "through" else max(g["depth"], 1e-12)
+    absQc = _diameter_guess(g, layout, s_param)
+    p0 = ResonatorParams(g["fr"], g["Ql"], absQc, 0.0, a, 0.0, 0.0, layout, s_param)
+    scales = np.array(
+        [float(np.mean(f)), max(p0.Ql, 1.0), max(p0.absQc, 1.0), 1.0, max(p0.a, 1e-12)]
+    )
     x0 = np.array([p0.fr, p0.Ql, p0.absQc, p0.phi, p0.a]) / scales
 
     def resid(xn):
         fr, Ql, absQc, phi, a = xn * scales
         m = model_s(
             f,
-            ResonatorParams(fr, abs(Ql), abs(absQc), phi, abs(a), 0.0, 0.0, geometry),
+            ResonatorParams(
+                fr, abs(Ql), abs(absQc), phi, abs(a), 0.0, 0.0, layout, s_param
+            ),
         )
         return np.abs(m) - mag
 
@@ -419,15 +511,26 @@ def fit_magnitude_only(f, mag, geometry: str = "notch", mag_is_db: bool = False)
     )
     fr, Ql, absQc, phi, a = res.x * scales
     params = ResonatorParams(
-        float(fr), abs(float(Ql)), abs(float(absQc)), float(phi), abs(float(a)), 0.0, 0.0, geometry
+        float(fr),
+        abs(float(Ql)),
+        abs(float(absQc)),
+        float(phi),
+        abs(float(a)),
+        0.0,
+        0.0,
+        layout,
+        s_param,
     )
     m = model_s(f, params)
     notes = []
-    if geometry == "transmission":
+    if kind == "through":
         notes.append(
-            "transmission |S|: a and |Qc| are degenerate; Qi from DCM is not trustworthy"
+            "through |S|: a and |Qc| are degenerate; Qi from DCM is not trustworthy"
         )
     notes.append("tau and alpha cannot be recovered from magnitude alone")
+    not_id = ["tau", "alpha"]
+    if kind == "through":
+        not_id.append("Qi")
     return FitResult(
         params=params,
         mode="magnitude",
@@ -435,19 +538,25 @@ def fit_magnitude_only(f, mag, geometry: str = "notch", mag_is_db: bool = False)
         message="; ".join(notes),
         diagnostics={
             "rms_amp": float(np.sqrt(np.mean((np.abs(m) - mag) ** 2))),
-            "identifiable": ["fr", "Ql", "phi", "a (notch baseline)", "|Qc| (notch)"],
-            "not_identifiable": ["tau", "alpha"]
-            + (["Qi"] if geometry == "transmission" else []),
+            "identifiable": ["fr", "Ql", "phi", "a (notch/S11 baseline)", "|Qc| (notch/S11)"],
+            "not_identifiable": not_id,
         },
     )
 
 
-def fit_hybrid(f, s, geometry: str = "notch"):
+def fit_hybrid(
+    f,
+    s,
+    layout: str = "hanger",
+    s_param: str = "S21",
+    geometry: str | None = None,
+):
     """Run amp+phase and circle fits; polish on the better start; compare."""
+    layout, s_param = resolve_layout_sparam(layout, s_param, geometry)
     f = np.asarray(f, dtype=float)
     s = np.asarray(s, dtype=np.complex128)
-    r_ap = fit_amp_phase(f, s, geometry=geometry)
-    r_c = fit_circle(f, s, geometry=geometry, tau=r_ap.params.tau, refine_model=True)
+    r_ap = fit_amp_phase(f, s, layout=layout, s_param=s_param)
+    r_c = fit_circle(f, s, layout=layout, s_param=s_param, tau=r_ap.params.tau, refine_model=True)
     rms_ap = r_ap.diagnostics.get("rms_complex", np.inf)
     rms_c = r_c.diagnostics.get("rms_complex", np.inf)
     best = r_ap if rms_ap <= rms_c else r_c
@@ -469,59 +578,31 @@ def fit_hybrid(f, s, geometry: str = "notch"):
     return best, r_ap, r_c
 
 
-def _peak_is_positive(tau_g):
-    tau_g = np.asarray(tau_g, dtype=float)
-    n_edge = max(len(tau_g) // 15, 8)
-    baseline = float(np.median(np.concatenate([tau_g[:n_edge], tau_g[-n_edge:]])))
-    detr = tau_g - baseline
-    return abs(float(detr.max())) >= abs(float(detr.min()))
+def fit_group_delay(f, tau_g, geometry=None, sign=None, model=None):
+    """Fit f_r, Q_l, τ from a group-delay trace (seconds, Hz).
 
+    Always the isolated-pole Lorentzian::
 
-def _resolve_delay_sign(tau_g, geometry, sign):
-    if sign in (-1, 1, -1.0, 1.0):
-        return float(np.sign(sign) or 1.0)
-    peak_pos = _peak_is_positive(tau_g)
-    # IEEE notch S21 has a delay *dip*; many VNA/*** traces are stored
-    # with the opposite sign and look like a peak.  Flip to match the data.
-    if geometry == "notch" and peak_pos:
-        return -1.0
-    if geometry in ("transmission", "reflection") and not peak_pos:
-        return -1.0
-    return 1.0
+        τ_g(f) = τ + s (f − fr) + A / (1 + 4 Ql² (f/fr − 1)²)
 
+    Qi, |Qc|, a, α are **not** identified from delay alone.  Pass complex
+    S to ``fit_circle`` / ``fit_amp_phase`` / ``fit_hybrid`` for those.
 
-def fit_group_delay(
-    f,
-    tau_g,
-    geometry: str = "auto",
-    sign="auto",
-    model: str = "auto",
-):
-    """Fit f_r, Q_l from a group-delay trace (seconds, Hz).
-
-    ``model``
-      * ``lorentzian`` — tau + slope*(f-fr) + A / (1+4 Q_l^2 (f/fr-1)^2).
-        Use this for a VNA **peak** (your 53672 traces).  Does not invent Q_c.
-      * ``sparam`` — derivative of the Probst S11/S21 model.  Needed for a
-        hanger **dip**.  Reflection near critical coupling is ill-posed
-        (S11→0, delay diverges) and is what produced the raised baseline.
-      * ``auto`` — peak → lorentzian, dip → sparam notch.
-
-    ``geometry`` is used only for the sparam model: notch / transmission /
-    reflection.  ``auto`` picks notch for a dip and skips S-geometry for a peak.
+    ``geometry``, ``model``, and ``sign`` are accepted only so old calls
+    still run; they are ignored (no silent notch↔reflection switch).
     """
+    if geometry is not None or sign is not None or model is not None:
+        warnings.warn(
+            "fit_group_delay always uses the delay Lorentzian (fr, Ql, τ). "
+            "geometry/model/sign are ignored and Qi is not identified from "
+            "delay-only data.  See docs/PHYSICS_AND_API.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     f = np.asarray(f, dtype=float)
     tau_g = np.asarray(tau_g, dtype=float)
     g = guess_from_group_delay(f, tau_g)
-    if model == "auto":
-        model = "lorentzian" if g["peak_is_positive"] else "sparam"
-    if geometry == "auto":
-        geometry = "notch" if not g["peak_is_positive"] else "transmission"
-    if model == "lorentzian":
-        return _fit_delay_lorentzian(f, tau_g, g)
-    if geometry not in ("notch", "transmission", "reflection"):
-        raise ValueError(geometry)
-    return _fit_delay_sparam(f, tau_g, g, geometry, sign)
+    return _fit_delay_lorentzian(f, tau_g, g)
 
 
 def _fit_delay_lorentzian(f, tau_g, g):
@@ -571,15 +652,18 @@ def _fit_delay_lorentzian(f, tau_g, g):
     fr, Ql, tau, amp, slope = unpack(res.x)
     model = delay_lorentzian(f, fr, Ql, tau, slope=slope, amp=amp)
     amp_tied = Ql / (np.pi * fr)
+    # Delay-only: layout/s_param are unknown.  Leave the hanger×S21 default
+    # on the dataclass but do not invent |Qc| / Qi.
     params = ResonatorParams(
         fr=fr,
         Ql=Ql,
-        absQc=1e12,
+        absQc=float("nan"),
         phi=0.0,
         a=1.0,
         alpha=0.0,
         tau=tau,
-        geometry="transmission",
+        layout="hanger",
+        s_param="S11",
     )
     rms = float(np.sqrt(np.mean((model - tau_g) ** 2)))
     return FitResult(
@@ -587,8 +671,8 @@ def _fit_delay_lorentzian(f, tau_g, g):
         mode="group_delay",
         success=bool(res.success),
         message=(
-            "lorentzian delay peak; Q_c/Q_i are not identified; "
-            f"amp/amp_through={amp / amp_tied:.3f} (1 ≈ transmission S21)"
+            "lorentzian delay; Q_c/Q_i are not identified; "
+            f"amp/amp_through={amp / amp_tied:.3f} (1 ≈ through S21 peak)"
         ),
         diagnostics={
             "rms_delay_s": rms,
@@ -602,117 +686,25 @@ def _fit_delay_lorentzian(f, tau_g, g):
             "peak_is_positive": g["peak_is_positive"],
             "tau_g_model": model,
             "identifiable": ["fr", "Ql", "tau", "slope", "amp"],
-            "not_identifiable": ["Qc", "Qi", "a", "alpha"],
-        },
-    )
-
-
-def _fit_delay_sparam(f, tau_g, g, geometry, sign):
-    sgn = _resolve_delay_sign(tau_g, geometry, sign)
-    tau0 = -g["tau"] if sgn < 0 else g["tau"]
-    # Keep reflection away from S11=0 (Ql = |Qc|/2), which diverges delay.
-    absQc0 = g["absQc"]
-    if geometry == "reflection" and abs(g["Ql"] / max(absQc0, 1e-12) - 0.5) < 0.05:
-        absQc0 = 2.5 * g["Ql"]
-    p0 = ResonatorParams(
-        fr=g["fr"],
-        Ql=g["Ql"],
-        absQc=absQc0,
-        phi=0.0,
-        a=1.0,
-        alpha=0.0,
-        tau=tau0,
-        geometry=geometry,
-    )
-    fr_s = float(np.mean(f))
-    tau_s = max(abs(p0.tau), np.std(tau_g), 1e-12)
-    delay_s = max(float(np.std(tau_g)), 1e-12)
-    # transmission delay is independent of Qc and phi — do not fit them
-    if geometry == "transmission":
-        scales = np.array([fr_s, max(p0.Ql, 1.0), tau_s], dtype=float)
-        x0 = np.array([p0.fr, p0.Ql, p0.tau]) / scales
-
-        def unpack(xn):
-            fr, Ql, tau = xn * scales
-            return ResonatorParams(
-                float(fr), abs(float(Ql)), 1e12, 0.0, 1.0, 0.0, float(tau), geometry
-            )
-
-        bounds = ([0.5, 0.05, -50.0], [1.5, 50.0, 50.0])
-    else:
-        scales = np.array(
-            [fr_s, max(p0.Ql, 1.0), max(p0.absQc, 1.0), 1.0, tau_s], dtype=float
-        )
-        x0 = np.array([p0.fr, p0.Ql, p0.absQc, p0.phi, p0.tau]) / scales
-
-        def unpack(xn):
-            fr, Ql, absQc, phi, tau = xn * scales
-            return ResonatorParams(
-                float(fr),
-                abs(float(Ql)),
-                abs(float(absQc)),
-                float(phi),
-                1.0,
-                0.0,
-                float(tau),
-                geometry,
-            )
-
-        bounds = (
-            [0.5, 0.05, 0.05, -np.pi, -50.0],
-            [1.5, 50.0, 50.0, np.pi, 50.0],
-        )
-
-    def resid(xn):
-        return (sgn * group_delay_model(f, unpack(xn)) - tau_g) / delay_s
-
-    res = least_squares(
-        resid,
-        x0,
-        bounds=bounds,
-        xtol=1e-12,
-        ftol=1e-12,
-        gtol=1e-12,
-        max_nfev=800,
-    )
-    params = unpack(res.x)
-    model = sgn * group_delay_model(f, params)
-    rms = float(np.sqrt(np.mean((model - tau_g) ** 2)))
-    notes = [f"sparam {geometry}, IEEE sign={sgn:g}"]
-    if geometry == "transmission":
-        notes.append("through-line delay does not determine Q_c or Q_i")
-    if geometry == "reflection":
-        from .models import coupling_regime
-
-        notes.append("regime " + coupling_regime(geometry, params.Ql, params.absQc, params.phi))
-        notes.append("delay-only Q_c is weak; prefer lorentzian if the overlay is poor")
-    notes.append("a and alpha are invisible in group delay")
-    return FitResult(
-        params=params,
-        mode="group_delay",
-        success=bool(res.success),
-        message="; ".join(notes),
-        diagnostics={
-            "rms_delay_s": rms,
-            "sign": sgn,
-            "model": "sparam",
-            "baseline_s": g["baseline"],
-            "peak_is_positive": g["peak_is_positive"],
-            "tau_g_model": model,
-            "identifiable": ["fr", "Ql", "tau"]
-            + (["absQc", "phi", "Qi"] if geometry == "notch" else []),
+            "not_identifiable": ["Qc", "Qi", "a", "alpha", "layout"],
         },
     )
 
 
 def fit_group_delay_vs_power(
-    f, power, delay_2d, geometry: str = "auto", sign="auto", model: str = "auto"
+    f, power, delay_2d, geometry=None, sign=None, model=None
 ):
     """Fit each power slice of a (n_power, n_freq) delay map.
 
-    Returns a list of FitResult (one per power) and a dict of arrays
-    ``fr, Ql, Qi, tau, power`` for plotting vs drive.
+    Each slice is the delay Lorentzian (fr, Ql, τ).  Qi is not filled in.
     """
+    if geometry is not None or sign is not None or model is not None:
+        warnings.warn(
+            "fit_group_delay_vs_power always uses the delay Lorentzian. "
+            "geometry/model/sign are ignored.  See docs/PHYSICS_AND_API.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     f = np.asarray(f, dtype=float)
     power = np.asarray(power, dtype=float)
     delay_2d = np.asarray(delay_2d, dtype=float)
@@ -726,9 +718,7 @@ def fit_group_delay_vs_power(
             )
     results = []
     for i, pwr in enumerate(power):
-        r = fit_group_delay(
-            f, delay_2d[i], geometry=geometry, sign=sign, model=model
-        )
+        r = fit_group_delay(f, delay_2d[i])
         r.diagnostics["power_dBm"] = float(pwr)
         results.append(r)
     out = {
@@ -743,4 +733,3 @@ def fit_group_delay_vs_power(
         "amp_s": np.array([r.diagnostics.get("amp_s", np.nan) for r in results]),
     }
     return results, out
-
