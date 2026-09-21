@@ -48,13 +48,12 @@ class FitResult:
         e = self.errors
         lines = [
             f"mode          : {self.mode}  ({self.message})",
-            f"layout        : {p.layout}",
-            f"s_param       : {p.s_param}  (formula {p.formula})",
-            f"f_r           : {p.fr:.6e} Hz" + (f"  ± {e['fr']:.3e}" if "fr" in e else ""),
-            f"Q_l           : {p.Ql:.6e}" + (f"  ± {e['Ql']:.3e}" if "Ql" in e else ""),
         ]
         if self.diagnostics.get("model") == "lorentzian":
             lines += [
+                "layout/s_param: not identified from delay-only data",
+                f"f_r           : {p.fr:.6e} Hz" + (f"  ± {e['fr']:.3e}" if "fr" in e else ""),
+                f"Q_l           : {p.Ql:.6e}" + (f"  ± {e['Ql']:.3e}" if "Ql" in e else ""),
                 f"tau (cable)   : {p.tau:.6e} s",
                 f"amp (peak)    : {self.diagnostics.get('amp_s', float('nan')):.6e} s",
                 f"slope         : {self.diagnostics.get('slope_s', 0.0):.6e} s/Hz",
@@ -63,6 +62,10 @@ class FitResult:
             ]
         else:
             lines += [
+                f"layout        : {p.layout}",
+                f"s_param       : {p.s_param}  (formula {p.formula})",
+                f"f_r           : {p.fr:.6e} Hz" + (f"  ± {e['fr']:.3e}" if "fr" in e else ""),
+                f"Q_l           : {p.Ql:.6e}" + (f"  ± {e['Ql']:.3e}" if "Ql" in e else ""),
                 f"|Q_c|         : {p.absQc:.6e}",
                 f"Q_c (DCM)     : {p.Qc_dia_corr:.6e}",
                 f"Q_i (DCM)     : {p.Qi_dia_corr:.6e}"
