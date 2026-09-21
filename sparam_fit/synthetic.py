@@ -18,8 +18,12 @@ def make_trace(params: ResonatorParams, n=401, span_bw=8.0, snr=None, seed=0):
     s = model_s(f, params)
     if snr is not None:
         rng = np.random.default_rng(seed)
-        # radius of the resonator circle ~ a * Ql/(2 |Qc|)
-        r0 = params.a * params.Ql / (2.0 * params.absQc)
+        # Hanger/through S21: circle radius a * Ql/(2 |Qc|).
+        # S11: diameter 2 Ql/|Qc|, radius a * Ql/|Qc|.
+        if params.formula == "reflection":
+            r0 = params.a * params.Ql / max(params.absQc, 1e-30)
+        else:
+            r0 = params.a * params.Ql / (2.0 * max(params.absQc, 1e-30))
         sigma = r0 / float(snr)
         s = s + sigma * (rng.normal(size=n) + 1j * rng.normal(size=n)) / np.sqrt(2)
     return f, s

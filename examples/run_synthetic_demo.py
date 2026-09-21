@@ -8,11 +8,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sparam_fit.models import ResonatorParams, model_s
+from sparam_fit.models import ResonatorParams
 from sparam_fit.synthetic import make_trace
 from sparam_fit.fit import fit_amp_phase, fit_circle, fit_hybrid, fit_magnitude_only
 from sparam_fit.plots import plot_delay_before_after, plot_fit_report
-from sparam_fit.guess import guess_delay_linear, refine_delay_circle, remove_delay
+from sparam_fit.guess import guess_delay_linear, refine_delay_circle
 
 
 def main(out: Path):
@@ -25,7 +25,8 @@ def main(out: Path):
         a=0.0032,
         alpha=-0.9,
         tau=38e-9,
-        geometry="notch",
+        layout="hanger",
+        s_param="S21",
     )
     f, s = make_trace(true, n=601, span_bw=10.0, snr=70, seed=11)
     np.savez(out / "synthetic_notch.npz", f=f, s=s)
@@ -34,17 +35,18 @@ def main(out: Path):
     tau = refine_delay_circle(f, s, tau0)
     plot_delay_before_after(f, s, tau, save_path=out / "delay_unwrap_circle.png")
 
-    r_c = fit_circle(f, s, geometry="notch")
+    r_c = fit_circle(f, s, layout="hanger", s_param="S21")
     plot_fit_report(f, s, r_c, title="circle fit", save_path=out / "circle_fit_report.png")
 
-    r_ap = fit_amp_phase(f, s, geometry="notch")
+    r_ap = fit_amp_phase(f, s, layout="hanger", s_param="S21")
     plot_fit_report(f, s, r_ap, title="amp + phase", save_path=out / "amp_phase_report.png")
 
-    r_m = fit_magnitude_only(f, np.abs(s), geometry="notch")
-    # magnitude-only has no complex overlay; still plot |S|
-    plot_fit_report(f, s, r_m, title="magnitude only vs complex data", save_path=out / "magnitude_only_report.png")
+    r_m = fit_magnitude_only(f, np.abs(s), layout="hanger", s_param="S21")
+    plot_fit_report(
+        f, s, r_m, title="magnitude only vs complex data", save_path=out / "magnitude_only_report.png"
+    )
 
-    best, _, _ = fit_hybrid(f, s)
+    best, _, _ = fit_hybrid(f, s, layout="hanger", s_param="S21")
     plot_fit_report(f, s, best, title="hybrid", save_path=out / "hybrid_report.png")
 
     report = out / "fit_summary.txt"

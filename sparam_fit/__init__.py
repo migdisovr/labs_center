@@ -3,8 +3,10 @@
 Implements the Probst / Ustinov circle-fit pipeline (RSI 2015, arXiv:1410.3365)
 together with sequential amplitude+phase and magnitude-only fits.
 
-Frequencies are always in Hz.  Quality factors are dimensionless.
-Linewidths are reported as FWHM in Hz:  kappa_Hz = f_r / Q.
+The S-formula is selected by chip ``layout`` × measured ``s_param``
+(see docs/PHYSICS_AND_API.md).  Frequencies are always in Hz.
+Quality factors are dimensionless.  Linewidths are FWHM in Hz:
+kappa_Hz = f_r / Q.
 """
 
 from .models import (
@@ -15,6 +17,9 @@ from .models import (
     quality_from_linewidth,
     linewidth_hz,
     coupling_regime,
+    formula_name,
+    validate_layout_sparam,
+    absQc_from_canonical_radius,
 )
 from .fit import (
     FitResult,
@@ -40,6 +45,9 @@ __all__ = [
     "quality_from_linewidth",
     "linewidth_hz",
     "coupling_regime",
+    "formula_name",
+    "validate_layout_sparam",
+    "absQc_from_canonical_radius",
     "FitResult",
     "fit_circle",
     "fit_amp_phase",
