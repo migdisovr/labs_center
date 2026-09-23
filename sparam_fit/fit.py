@@ -113,6 +113,44 @@ def _scales(p0: ResonatorParams, f):
     )
 
 
+# Scaled bounds for the 7-vector (fr, Ql, absQc, phi, a, alpha, tau).
+_POLISH_LO = np.array([0.5, 0.05, 0.05, -np.pi, 0.05, -np.pi, -50.0])
+_POLISH_HI = np.array([1.5, 50.0, 50.0, np.pi, 50.0, np.pi, 50.0])
+
+
+def _clip_scaled(x0, lo, hi, pad=1e-8):
+    """Project a start vector strictly inside the box (scipy TRF requires this)."""
+    x0 = np.asarray(x0, dtype=float).copy()
+    lo = np.asarray(lo, dtype=float)
+    hi = np.asarray(hi, dtype=float)
+    mid = 0.5 * (lo + hi)
+    bad = ~np.isfinite(x0)
+    x0[bad] = mid[bad]
+    span = np.maximum(hi - lo, 1e-15)
+    return np.clip(x0, lo + pad * span, hi - pad * span)
+
+
+def _sanitize_full_params(p0: ResonatorParams, f, s) -> ResonatorParams:
+    """Replace non-finite / degenerate circle starts before the complex polish."""
+    f = np.asarray(f, dtype=float)
+    s = np.asarray(s, dtype=np.complex128)
+    fmean = float(np.mean(f))
+    fr = float(p0.fr) if np.isfinite(p0.fr) and p0.fr > 0 else fmean
+    Ql = float(abs(p0.Ql)) if np.isfinite(p0.Ql) else 1e3
+    Ql = max(Ql, 1.0)
+    absQc = float(abs(p0.absQc)) if np.isfinite(p0.absQc) else Ql
+    absQc = max(absQc, 0.05 * Ql)
+    a_edge = float(np.median(np.abs(s)))
+    a = float(p0.a) if np.isfinite(p0.a) and p0.a > 0 else a_edge
+    a = max(a, 1e-6)
+    phi = float(wrap_phase(p0.phi)) if np.isfinite(p0.phi) else 0.0
+    alpha = float(wrap_phase(p0.alpha)) if np.isfinite(p0.alpha) else 0.0
+    tau = float(p0.tau) if np.isfinite(p0.tau) else 0.0
+    return ResonatorParams(
+        fr, Ql, absQc, phi, a, alpha, tau, p0.layout, p0.s_param
+    )
+
+
 def _complex_resid(xn, scales, f, s, layout, s_param):
     p = _unpack_full(xn * scales, layout, s_param)
     m = model_s(f, p)
@@ -252,6 +290,14 @@ def fit_circle(
     p_off = (xc + r0 * np.cos(beta)) + 1j * (yc + r0 * np.sin(beta))
     a = float(np.abs(p_off))
     alpha = float(np.angle(p_off))
+    # Lossless notch: the circle goes through 0.  The off-resonant point P can
+    # land on the origin; then a=0 and the later least_squares start is
+    # infeasible.  Fall back to the delay-removed edge amplitude/phase.
+    n_edge = max(len(f) // 20, 5)
+    a_edge = float(np.median(np.abs(np.concatenate([z[:n_edge], z[-n_edge:]]))))
+    if (not np.isfinite(a)) or a < 0.2 * max(a_edge, 1e-12):
+        a = max(a_edge, 1e-6)
+        alpha = float(np.angle(np.mean(np.concatenate([z[:n_edge], z[-n_edge:]]))))
 
     z_can = z / (a * np.exp(1j * alpha)) if a > 0 else z
     xc2, yc2, r02 = fit_circle_algebraic(z_can, refine=True)
@@ -308,14 +354,13 @@ def _snr_est(z, xc, yc, r0):
 
 
 def _polish_complex(f, s, p0: ResonatorParams) -> ResonatorParams:
+    p0 = _sanitize_full_params(p0, f, s)
     scales = _scales(p0, f)
-    x0 = _pack_full(p0) / scales
-    lo = np.array([0.5, 0.05, 0.05, -np.pi, 0.05, -np.pi, -50.0])
-    hi = np.array([1.5, 50.0, 50.0, np.pi, 50.0, np.pi, 50.0])
+    x0 = _clip_scaled(_pack_full(p0) / scales, _POLISH_LO, _POLISH_HI)
     res = least_squares(
         lambda xn: _complex_resid(xn, scales, f, s, p0.layout, p0.s_param),
         x0,
-        bounds=(lo, hi),
+        bounds=(_POLISH_LO, _POLISH_HI),
         xtol=1e-12,
         ftol=1e-12,
         max_nfev=400,

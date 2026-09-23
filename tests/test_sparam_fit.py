@@ -341,3 +341,45 @@ def test_legacy_fit_geometry_kwarg_warns():
     with pytest.warns(DeprecationWarning, match="geometry="):
         r = fit_circle(f, s, geometry="notch", refine_model=False)
     assert r.params.layout == "hanger" and r.params.s_param == "S21"
+
+
+def test_hybrid_survives_lossless_notch_through_origin():
+    """Ansys-like PEC hanger: Qi=∞, Ql=|Qc|, circle through 0.
+
+    Circle-fit can put the off-resonant point on the origin (a=0) and then
+    least_squares used to raise ``x0 is infeasible``.  Hybrid must still run.
+    """
+    p = ResonatorParams(
+        fr=7.05e9,
+        Ql=5700.0,
+        absQc=5700.0,
+        phi=-0.23,
+        a=0.97,
+        alpha=-0.01,
+        tau=8e-12,
+        layout="hanger",
+        s_param="S21",
+    )
+    f, s = make_trace(p, n=501, span_bw=12.0, snr=None)
+    best, ap, circ = fit_hybrid(f, s, layout="hanger", s_param="S21")
+    assert best.params.fr == pytest.approx(p.fr, rel=2e-4)
+    assert best.params.Ql == pytest.approx(p.Ql, rel=0.2)
+    assert np.isfinite(best.diagnostics.get("rms_complex", np.nan))
+
+
+def test_hybrid_survives_resonance_near_window_edge():
+    """Last peak in a comb: slice starts just below fr (asymmetric window)."""
+    p = ResonatorParams(
+        fr=7.05e9,
+        Ql=5700.0,
+        absQc=5600.0,
+        phi=-0.2,
+        a=1.0,
+        tau=8e-12,
+        layout="hanger",
+        s_param="S21",
+    )
+    f, s = make_trace(p, n=801, span_bw=16.0, snr=None)
+    keep = f > p.fr - 1.5 * p.fr / p.Ql
+    best, _, _ = fit_hybrid(f[keep], s[keep], layout="hanger", s_param="S21")
+    assert best.params.fr == pytest.approx(p.fr, rel=1e-3)
