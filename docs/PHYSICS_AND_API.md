@@ -194,3 +194,59 @@ the S11 circle uses the S11 radius law |Qc| = Ql / r0.
 - hanger S11 delay peak → `fit_group_delay(...)`  (Lorentzian; no Qi)
 - hanger S11 complex → `fit_circle(..., layout="hanger", s_param="S11")`
 - do not use `layout="through"` for hangers
+
+---
+
+## 7. Flux maps: resonator frequency versus external bias
+
+One-tone map: S on a grid of frequency and a bias (coil current or flux-line
+voltage).  The device is the usual hanger — a λ/4 readout, one end shorted,
+the open end coupled to the feedline and capacitively to a flux-tunable
+qubit (SQUID, or a circuit with more junctions).  The ridge on the map is
+the **readout resonator**, not the qubit.  The qubit moves the resonator
+through the dispersive pull.
+
+Two-level level repulsion, qubit in |g⟩, |f_q − f_r| ≫ g:
+
+    f_r(φ) = f_r,bare − g² / (f_q(φ) − f_r,bare)
+
+- Qubit above the resonator: f_r is pulled **down**.  The pull is strongest
+  where f_q is closest, which is the **lower** qubit sweet spot if the whole
+  qubit band stays above the resonator.
+- Qubit below the resonator: f_r is pushed **up**.  The closest point is then
+  the **upper** sweet spot (maximum f_q).
+
+A sweet spot is an extremum of this curve: **df_r/dbias = 0**.  That is the
+flux bias at which the qubit frequency is first-order insensitive to flux,
+provided the qubit does not cross the resonator (χ stays finite and monotonic
+in f_q).
+
+An inflection is **d²f_r/dbias² = 0**.  The slope |df_r/dbias| is largest
+there.  That is the most flux-sensitive point on the curve, not a sweet
+spot.  Maximum geometric curvature is a third, different number: it sits
+near a sharp extremum but is not the definition of one.
+
+Upper versus lower, from the map alone:
+
+| What is sharper | Where f_r sits | Qubit | Which sweet spot is the sharp one |
+|-----------------|----------------|-------|-----------------------------------|
+| f_r minimum | below the other extremum | above the resonator | lower (closest approach) |
+| f_r maximum | above the other extremum | below the resonator | upper (closest approach) |
+
+The flatter extremum is the other sweet spot, closer to the bare resonator
+frequency.  A symmetric SQUID has no finite-frequency lower sweet spot;
+a smooth pair of extrema is a sign of junction asymmetry.  If the scan
+contains only one extremum, the function does not guess upper versus lower.
+
+```python
+from sparam_fit import analyze_flux_map, plot_flux_analysis
+
+result = analyze_flux_map(freq_hz, bias, s21, layout="hanger", s_param="S21")
+print(result.summary())
+# result.primary is the upper sweet spot when that label exists
+plot_flux_analysis(result, bias_scale=1e3, bias_unit="mA")
+```
+
+`which="sharpest"` fits only the closer approach.  `fit="magnitude"` is
+used automatically when the map is real |S|.  The cut is centered on the
+tracked dip and passed to the existing circle / amp-phase / hybrid fit.

@@ -70,7 +70,20 @@ alias (`notch` → hanger×S21, `transmission` → through×S21,
 pipeline.  `notebooks/Fit_FlipChip_Sparametr_Actual.ipynb` — the working
 lab notebook, with a group-delay section at the bottom.
 
+Flux map (resonator versus coil current): sweet spots are extrema of the
+tracked ridge, `df_r/dbias = 0`.  The cuts at those biases go through the
+same fitters as a single trace.  See `docs/PHYSICS_AND_API.md` §7.
+
+```python
+from sparam_fit import analyze_flux_map
+
+result = analyze_flux_map(freq_hz, coil_current_A, s21, layout="hanger", s_param="S21")
+print(result.summary())          # upper / lower sweet spots and the primary fit
+result.primary.fit.summary()     # f_r, Q_l, Q_i at the upper sweet spot
+```
+
 Synthetic demos: `python3 examples/run_synthetic_demo.py`,
-`python3 examples/run_delay_demo.py`, `python3 examples/plot_geometries.py`
+`python3 examples/run_delay_demo.py`, `python3 examples/plot_geometries.py`,
+`python3 examples/run_flux_demo.py`
 
 Tests: `python3 -m pytest tests/test_sparam_fit.py -q`
