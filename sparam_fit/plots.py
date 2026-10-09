@@ -123,6 +123,105 @@ def plot_group_delay_fit(f, tau_g, result, title=None, save_path=None):
     return fig
 
 
+def plot_flux_analysis(
+    analysis,
+    *,
+    title=None,
+    save_path=None,
+    bias_scale: float = 1.0,
+    bias_unit: str = "A",
+):
+    """|S| map, f_r(bias), and the fitted sweet-spot cuts.
+
+    ``bias_scale`` multiplies the bias axis for display (1000 shows amperes
+    as milliamperes).  Sweet spots are circles (upper) and squares (lower).
+    Inflections are small crosses: they are not sweet spots.
+    """
+    freq = np.asarray(analysis.freq, dtype=float)
+    bias = np.asarray(analysis.bias, dtype=float) * bias_scale
+    mag = np.abs(np.asarray(analysis.s))
+    track = analysis.track
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+    ax = axes[0, 0]
+    mesh = ax.pcolormesh(freq * 1e-9, bias, mag.T, shading="auto", cmap="hot")
+    ax.plot(track.fr_hz * 1e-9, track.bias * bias_scale, color="cyan", lw=1.5, label="resonator")
+    _mark_features(ax, analysis.features, bias_scale, frequency=True)
+    ax.set_xlabel("frequency (GHz)")
+    ax.set_ylabel(f"bias ({bias_unit})")
+    ax.set_title(title or "resonator versus flux")
+    ax.legend(fontsize=8, loc="best")
+    fig.colorbar(mesh, ax=ax, label="|S|")
+
+    ax = axes[0, 1]
+    ax.plot(track.bias * bias_scale, track.fr_hz * 1e-9, color="0.2", lw=1.2)
+    _mark_features(ax, analysis.features, bias_scale, frequency=False)
+    ax.set_xlabel(f"bias ({bias_unit})")
+    ax.set_ylabel("tracked f_r (GHz)")
+    ax.set_title("sweet spots are extrema, not inflections")
+    ax.legend(fontsize=8, loc="best")
+
+    ax = axes[1, 0]
+    for cut in analysis.cuts:
+        role = cut.feature.qubit_role
+        ax.plot(cut.freq * 1e-9, np.abs(cut.s), ".", ms=3, label=f"|S| {role}")
+        if cut.fit is not None and getattr(cut.fit, "params", None) is not None:
+            model = model_s(cut.freq, cut.fit.params)
+            ax.plot(cut.freq * 1e-9, np.abs(model), "-", lw=1.4, label=f"fit {role}")
+    ax.set_xlabel("frequency (GHz)")
+    ax.set_ylabel("|S|")
+    ax.set_title("cuts at the sweet spots")
+    if analysis.cuts:
+        ax.legend(fontsize=8)
+
+    ax = axes[1, 1]
+    ax.axis("off")
+    ax.text(
+        0.02,
+        0.98,
+        analysis.summary(),
+        va="top",
+        ha="left",
+        family="monospace",
+        fontsize=7.5,
+    )
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=140, bbox_inches="tight")
+    return fig
+
+
+def _mark_features(ax, features, bias_scale: float, frequency: bool):
+    style = {
+        ("sweet_spot", "upper"): ("o", "red", "upper sweet spot"),
+        ("sweet_spot", "lower"): ("s", "gold", "lower sweet spot"),
+        ("sweet_spot", "unassigned"): ("D", "white", "sweet spot"),
+        ("inflection", "inflection"): ("x", "0.85", "inflection"),
+    }
+    seen = set()
+    for feat in features:
+        if feat.kind == "inflection":
+            key = ("inflection", "inflection")
+        else:
+            key = ("sweet_spot", feat.qubit_role if feat.qubit_role in ("upper", "lower") else "unassigned")
+        marker, color, label = style[key]
+        show = label if label not in seen else None
+        seen.add(label)
+        x = feat.fr_hz * 1e-9 if frequency else feat.bias * bias_scale
+        y = feat.bias * bias_scale if frequency else feat.fr_hz * 1e-9
+        edge = "k" if marker != "x" else color
+        ax.plot(
+            x,
+            y,
+            marker=marker,
+            color=color,
+            markeredgecolor=edge,
+            ms=8,
+            linestyle="none",
+            label=show,
+        )
+
+
 def plot_delay_power_map(f, power, delay_2d, title=None, save_path=None):
     fig, ax = plt.subplots(figsize=(8, 5))
     im = ax.pcolormesh(

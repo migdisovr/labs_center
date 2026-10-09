@@ -1,0 +1,25 @@
+flux map      : 301 freq × 121 bias
+layout/S      : hanger × S21  (track feature: dip)
+qubit side    : above
+sweet spot    : df_r/dbias = 0.  An inflection (d²f_r = 0) is the steepest slope, not a sweet spot.
+note          : qubit side from level repulsion: the sharper extremum is the closer approach (sharpness of f_r maxima 1.165e+13, of f_r minima 7.376e+13)
+sweet spots   : 3
+  lower        fr_minimum    bias=-1.502682e-03  f_r=6.624224e+09 Hz  sharpness=6.651e+13  closest
+  upper        fr_maximum    bias=2.871942e-05  f_r=6.634140e+09 Hz  sharpness=1.165e+13
+  lower        fr_minimum    bias=1.499739e-03  f_r=6.624222e+09 Hz  sharpness=8.101e+13  closest
+inflections   : 3 (not fitted)
+primary fit   :
+mode          : hybrid  (selected amp_phase (rms_ap=4.191e-05, rms_circle=4.191e-05))
+layout        : hanger
+s_param       : S21  (formula notch)
+f_r           : 6.634041e+09 Hz
+Q_l           : 2.000188e+03
+|Q_c|         : 3.199774e+03
+Q_c (DCM)     : 3.210005e+03
+Q_i (DCM)     : 5.307097e+03
+Q_i (no corr) : 5.335299e+03
+phi           : 0.079860 rad
+a, alpha, tau : 3.000475e-02,  0.286566 rad,  3.499848e-08 s
+kappa_l / 2pi : 3.316708e+06 Hz  (FWHM)
+kappa_i / 2pi : 1.250032e+06 Hz
+kappa_c / 2pi : 2.066676e+06 Hz
